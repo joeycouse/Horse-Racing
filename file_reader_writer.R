@@ -10,7 +10,13 @@ horse_files <-
   clean_names()%>%
   as_tibble(.) %>%
   mutate(rc_track = str_to_upper(rc_track),
-         rc_date = mdy(rc_date))
+         rc_date = mdy(rc_date),
+         last_raced = mdy(last_raced)) %>%
+  rename(lt_earnings = earnings,
+         lt_starts = starts,
+         lt_wins = wins,
+         lt_places = places,
+         lt_shows = shows)
 
 
 running_lines <- 
@@ -28,6 +34,7 @@ running_lines <-
 # Condense rows into single row
 # Make Function that generates additional variables
 # Win percentage, last time raced, horse age, etc
+# Generate Dependent Variable Set
 
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 
@@ -86,7 +93,7 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
              medication = as.factor(medication),
              equipment = as.factor(equipment),
              non_betting_starter = as.factor(non_betting_starter),
-             favorite = as.factor(non_betting_starter)) %>%
+             favorite = as.factor(favorite)) %>%
       type_convert()
     
     all_starters <- bind_rows(all_starters, starters)
@@ -100,12 +107,107 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
       return(all_starters)}
 }
 
-##################################
+
+###############################
+
+# Returning dataframes and filtering to contain matches from both datasets
 
 races <- read_chart_files(chart_files, return_races = T, return_starters = F)
 starters <- read_chart_files(chart_files, return_races = F, return_starters = T)
 
-str(running_lines)
+starters <- starters %>%
+  filter(post_position < 99, odds != 0)
 
-as.tibble(running_lines)
+races <- races %>%
+  filter(num_horses <= 12) 
+
+races <- races %>%
+  semi_join(starters, by = c('rc_track', 'rc_date', 'rc_race')) 
+
+starters <- starters %>%
+  semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
+
+
+# Dependent variable generation and additional column generation
+
+race_results <- starters %>%
+  semi_join(races, by = c('rc_track', 'rc_date', 'rc_race')) %>%
+  filter(finish_position == 1) %>%
+  select(rc_track, rc_date, rc_race,  finish_position, post_position) %>%
+  pivot_wider(
+    names_from = post_position,
+    names_glue = 'horse_{post_position}_win',
+    names_sort = TRUE,
+    values_from = finish_position,
+    values_fill = 0)
+
+features <- starters %>%
+  select(rc_track, rc_date, rc_race, odds, favorite, post_position) %>%
+  mutate(odds = 100/(odds+100)) %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  mutate(odds = exp(odds)/sum(exp(odds)), favorite = if_else(favorite == 'Y',1,0)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = post_position,
+              values_from = c(odds,favorite),
+              values_fill = 0)
+
+# Cleaning Up Horse File
+horse_files <- horse_files %>%
+  mutate(d_born ='15', m_born = as.character(m_born)) %>%
+  unite('birthday', c(y_born, m_born, d_born), sep = '-') %>%
+  mutate(birthday = ymd(birthday), 
+         years_old = round((rc_date - birthday)/365.25, 2),
+         days_since_last_race = (rc_date - last_raced)) %>%
+  select(rc_track, 
+         rc_date, 
+         rc_race,
+         horse,
+         weight,
+         post_position,
+         years_old,
+         days_since_last_race,
+         bute,
+         lasix,
+         cy_earnings:dist_shows,
+         jt_track_starts:last_col()) %>%
+  rowwise() %>%
+  mutate(cy_money = sum(c_across(starts_with("cy") & -contains(c('earnings', 'starts')))),
+         py_money = sum(c_across(starts_with("py") & -contains(c('earnings', 'starts')))),
+         lt_money = sum(c_across(starts_with("lt") & -contains(c('earnings', 'starts')))),
+         w_money = sum(c_across(starts_with("w_") & -contains(c('earnings', 'starts')))),
+         t_money = sum(c_across(starts_with("t_") & -contains(c('earnings', 'starts')))),
+         d_money = sum(c_across(starts_with("d_") & -contains(c('earnings', 'starts')))),
+         trk_money = sum(c_across(starts_with("trk") & -contains(c('earnings', 'starts')))),
+         dist_money = sum(c_across(starts_with("dist") & -contains(c('earnings', 'starts')))),
+         cy_money_pct = cy_money/cy_starts,
+         py_money_pct = py_money/py_starts,
+         lt_money_pct = lt_money/lt_starts,
+         w_money_pct = w_money/w_starts,
+         t_money_pct = t_money/t_starts,
+         d_money_pct = d_money/d_starts,
+         trk_money_pct = trk_money/trk_starts,
+         dist_money_pct = dist_money/dist_starts,
+         .keep = 'unused') %>%
+  ungroup() %>%
+  mutate(across(cy_money_pct:dist_money_pct, ~replace_na(. , 0)))
+  
+running_lines<-running_lines %>%
+  filter(final_time != -1) %>%
+  mutate(minutes = as.numeric(if_else(as.numeric(final_time) >100, str_sub(final_time, 1,1),'0')),
+         seconds = as.numeric(if_else(as.numeric(final_time) >100, str_sub(final_time, 2,-1), as.character(final_time))),
+         final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
+  select(-minutes, -seconds)
+
+running_lines %>%
+  ggplot()+
+  aes(x = final_time) +
+  geom_histogram()
+
+
+test <- running_lines %>%
+  select(rc_track, rc_date, rc_race, horse, distance, dist_unit, final_time)
+
+  
+
+                              
 
