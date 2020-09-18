@@ -1,4 +1,5 @@
 library(tidyverse)
+library(broom)
 library(data.table)
 library(janitor)
 library(lubridate)
@@ -25,8 +26,14 @@ running_lines <-
                    col_types = 'ccicccccdcccdccddccccddddddddcccddddddfccdddddddddddddccddddccddffffffcccddccccdddddddfddddddddddddd')) %>%
   clean_names() %>%
   as_tibble() %>%
+  distinct(track, date, horse, final_time, .keep_all = TRUE) %>%
   mutate(rc_date = mdy(rc_date),
-         track = str_to_upper(track))
+         track = str_to_upper(track)) %>%
+  filter(final_time != -1, odds != 0, odds_position <= starters) %>%
+  mutate(minutes = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 1,1),'0')),
+         seconds = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 2,-1), as.character(final_time))),
+         final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
+  select(-minutes, -seconds)
   
 
 # To Do:
@@ -191,23 +198,36 @@ horse_files <- horse_files %>%
   ungroup() %>%
   mutate(across(cy_money_pct:dist_money_pct, ~replace_na(. , 0)))
   
-running_lines<-running_lines %>%
-  filter(final_time != -1) %>%
-  mutate(minutes = as.numeric(if_else(as.numeric(final_time) >100, str_sub(final_time, 1,1),'0')),
-         seconds = as.numeric(if_else(as.numeric(final_time) >100, str_sub(final_time, 2,-1), as.character(final_time))),
-         final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
-  select(-minutes, -seconds)
-
-running_lines %>%
-  ggplot()+
-  aes(x = final_time) +
-  geom_histogram()
-
-
-test <- running_lines %>%
-  select(rc_track, rc_date, rc_race, horse, distance, dist_unit, final_time)
-
+######################
   
+running_lines %>%
+  select(rc_track, rc_date, rc_race, track, date, horse, distance, dist_unit, final_time) %>%
+  mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M', 'F', 'Y')) %>%
+  mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance)) %>%
+  select(-dist_unit) %>%
+  mutate(speed = distance/final_time) %>%
+  filter(speed <= 0.11) %>%
+  sample_frac(0.25) %>%
+  ggplot()+
+  aes(x = distance, y = speed)+
+  geom_jitter()
 
-                              
+library(splines2)
+
+fit<-lm(speed ~ bSpline(distance,knots = c(2,7,18)),data = info )
+
+predictions<-predict(fit, newdata = info) 
+
+test<-augment(fit, info)
+
+test %>%
+  sample_frac(0.25) %>%
+  ggplot()+
+  aes(x = distance, y = speed)+
+  geom_line(aes(x = distance, y = .fitted), color = 'darkblue', size = 2 )+
+  geom_jitter()
+###
+
+info %>%
+  top_n(20, -speed)
 
