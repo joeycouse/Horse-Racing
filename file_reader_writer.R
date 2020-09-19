@@ -3,6 +3,8 @@ library(broom)
 library(data.table)
 library(janitor)
 library(lubridate)
+library(splines2)
+
 
 horse_files <- 
   Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch') %>%
@@ -19,23 +21,6 @@ horse_files <-
          lt_places = places,
          lt_shows = shows)
 
-
-running_lines <- 
-  Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr') %>%
-  map_df(~read_csv(., trim_ws = TRUE, 
-                   col_types = 'ccicccccdcccdccddccccddddddddcccddddddfccdddddddddddddccddddccddffffffcccddccccdddddddfddddddddddddd')) %>%
-  clean_names() %>%
-  as_tibble() %>%
-  distinct(track, date, horse, final_time, .keep_all = TRUE) %>%
-  mutate(rc_date = mdy(rc_date),
-         track = str_to_upper(track)) %>%
-  filter(final_time != -1, odds != 0, odds_position <= starters) %>%
-  mutate(minutes = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 1,1),'0')),
-         seconds = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 2,-1), as.character(final_time))),
-         final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
-  select(-minutes, -seconds)
-  
-
 # To Do:
 # Clean up Running Line File
 # Condense rows into single row
@@ -44,6 +29,7 @@ running_lines <-
 # Generate Dependent Variable Set
 
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
+running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 
 read_chart_files <- function(file_paths, return_races=FALSE, return_starters = TRUE){
   
@@ -114,14 +100,35 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
       return(all_starters)}
 }
 
+read_running_lines <- function(file_paths){
+  
+  running_lines <- map_df(file_paths, ~read_csv(., trim_ws = TRUE, 
+                   col_types = 'ccicccccdcccdccddccccddddddddcccddddddfccdddddddddddddccddddccddffffffcccddccccdddddddfddddddddddddd')) %>%
+    clean_names() %>%
+    as_tibble() %>%
+    distinct(track, date, horse, final_time, .keep_all = TRUE) %>%
+    mutate(rc_date = mdy(rc_date),
+           track = str_to_upper(track)) %>%
+    filter(final_time != -1, odds != 0, odds_position <= starters) %>%
+    mutate(minutes = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 1,1),'0')),
+           seconds = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 2,-1), as.character(final_time))),
+           final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
+    select(-minutes, -seconds) %>%
+    mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M', 'F', 'Y')) %>%
+    mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance)) %>%
+    select(-dist_unit) %>%
+    mutate(speed = distance/final_time) %>%
+    filter(speed <= 0.11, speed > 0.05, distance <= 20)
+  
+}
+
+running_lines <- read_running_lines(running_line_files)
+races <- read_chart_files(chart_files, return_races = T, return_starters = F)
+starters <- read_chart_files(chart_files, return_races = F, return_starters = T)
 
 ###############################
 
 # Returning dataframes and filtering to contain matches from both datasets
-
-races <- read_chart_files(chart_files, return_races = T, return_starters = F)
-starters <- read_chart_files(chart_files, return_races = F, return_starters = T)
-
 starters <- starters %>%
   filter(post_position < 99, odds != 0)
 
@@ -200,34 +207,10 @@ horse_files <- horse_files %>%
   
 ######################
   
-running_lines %>%
-  select(rc_track, rc_date, rc_race, track, date, horse, distance, dist_unit, final_time) %>%
-  mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M', 'F', 'Y')) %>%
-  mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance)) %>%
-  select(-dist_unit) %>%
-  mutate(speed = distance/final_time) %>%
-  filter(speed <= 0.11) %>%
-  sample_frac(0.25) %>%
-  ggplot()+
-  aes(x = distance, y = speed)+
-  geom_jitter()
-
-library(splines2)
-
-fit<-lm(speed ~ bSpline(distance,knots = c(2,7,18)),data = info )
-
-predictions<-predict(fit, newdata = info) 
-
-test<-augment(fit, info)
-
-test %>%
-  sample_frac(0.25) %>%
-  ggplot()+
-  aes(x = distance, y = speed)+
-  geom_line(aes(x = distance, y = .fitted), color = 'darkblue', size = 2 )+
-  geom_jitter()
-###
-
-info %>%
-  top_n(20, -speed)
-
+check <-running_lines %>%
+  select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, final_time) %>%
+  nest(data = everything()) %>%
+  mutate(model = map(data, ~lm(speed ~ bSpline(distance,knots = c(2,6,8)), data = .))) %>%
+  mutate(final = map2(model, data, ~augment(.x, .y))) %>%
+  select(-data, -model) %>%
+  unnest(cols = c(final))
