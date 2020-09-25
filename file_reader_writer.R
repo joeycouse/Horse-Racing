@@ -3,6 +3,7 @@ library(broom)
 library(janitor)
 library(lubridate)
 library(splines2)
+library(ggcorrplot)
 
 
 # To Do:
@@ -16,6 +17,7 @@ chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch')
 betting_file_paths <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.pgh')
+special_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.cs')
 
 read_chart_files <- function(file_paths, return_races=FALSE, return_starters = TRUE){
   
@@ -101,7 +103,7 @@ read_running_lines <- function(file_paths){
            seconds = as.numeric(if_else(as.numeric(final_time) >= 100, str_sub(final_time, 2,-1), as.character(final_time))),
            final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
     select(-minutes, -seconds) %>%
-    mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M', 'F', 'Y')) %>%
+    mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M' | dist_unit == 'F', 'F', 'Y')) %>%
     mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance)) %>%
     select(-dist_unit) %>%
     mutate(speed = distance/final_time) %>%
@@ -161,7 +163,10 @@ read_horse_files <- function(file_paths){
            dist_money_pct = dist_money/dist_starts,
            .keep = 'unused') %>%
     ungroup() %>%
-    mutate(across(cy_money_pct:dist_money_pct, ~replace_na(. , 0)))
+    mutate(across(cy_money_pct:dist_money_pct, ~replace_na(. , 0))) %>%
+    rename(horse_name = horse) %>%
+    select(-post_position) %>%
+    mutate(horse_name = str_trim(horse_name))
   
     return(horse_files)
   
@@ -173,12 +178,15 @@ betting_files <- map_df(file_paths, ~read_csv(., trim_ws = TRUE,
                                                         col_types = 'ccdcdccc')) %>%
     clean_names() %>%
     as_tibble() %>%
-    filter(post_position <= 12) %>%
+    filter(post_position <= 98) %>%
     select(-prog_num)%>%
+    mutate(rc_date = mdy(rc_date)) %>%
     separate(ml_odds, into = c('top', 'bottom'), sep = '-', convert = TRUE) %>%
     mutate(ml_odds = bottom/(bottom+top), .keep = 'unused') %>%
     group_by(rc_track, rc_date, rc_race) %>%
-    mutate(ml_odds = ml_odds/sum(ml_odds))
+    mutate(ml_odds = ml_odds/sum(ml_odds)) %>%
+    rename(horse_name = horse) %>%
+    select(-jockey, -post_position)
 
 return(betting_files)
   
@@ -189,6 +197,14 @@ races <- read_chart_files(chart_files, return_races = T, return_starters = F)
 starters <- read_chart_files(chart_files, return_races = F, return_starters = T)
 horses <- read_horse_files(horse_files)
 betting <- read_betting_files(betting_file_paths)
+special <- map_df(special_files, ~read_csv(., trim_ws = TRUE, 
+                                           col_types = 'ccdccddddddddccc')) %>%
+  clean_names() %>%
+  as_tibble() %>%
+  mutate(rc_date = mdy(rc_date)) %>%
+  rename(horse_name = horse) %>%
+  select(rc_track, rc_date, rc_race, horse_name ,starts_with('best')) %>%
+  select(-best_track_surface)
 ###############################
 
 # Returning dataframes and filtering to contain matches from both datasets
@@ -204,13 +220,19 @@ races <- races %>%
 starters <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
 
+races_features <- races %>%
+  select(rc_track, rc_date, rc_race, race_type, purse, distance, distance_unit, surface, track_condition, speed_number) %>%
+  mutate(distance_unit = if_else(is.na(distance_unit) | distance_unit == 'M' | distance_unit == 'F', 'F', 'Y'),
+         distance = round(distance/100,2)) %>%
+  mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 2), distance)) %>%
+  select(-distance_unit, -race_type)
 
 # Dependent variable generation and additional column generation
 
 race_results <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race')) %>%
   filter(finish_position == 1) %>%
-  select(rc_track, rc_date, rc_race,  finish_position, post_position) %>%
+  select(rc_track, rc_date, rc_race, finish_position, post_position) %>%
   pivot_wider(
     names_from = post_position,
     names_glue = 'horse_{post_position}_win',
@@ -219,34 +241,83 @@ race_results <- starters %>%
     values_fill = 0)
 
 starter_features <- starters %>%
-  select(rc_track, rc_date, rc_race, odds, favorite, post_position) %>%
+  select(rc_track, rc_date, rc_race, horse_name, odds, favorite, post_position) %>%
+  mutate(horse_name = str_trim(horse_name)) %>%
   mutate(odds = 100/(odds+100)) %>%
   group_by(rc_track, rc_date, rc_race) %>%
-  mutate(odds = odds/sum(odds), favorite = if_else(favorite == 'Y',1,0)) %>%
-  ungroup() %>%
-  pivot_wider(names_from = post_position,
-              values_from = c(odds,favorite),
-              values_fill = 0)
+  mutate(odds = round(odds/sum(odds), 3), favorite = if_else(favorite == 'Y',1,0)) 
 
 # Fitting cubic spline for distance vs speed function
 
-spline_results <- running_lines %>%
+spline_features <- running_lines %>%
   select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj, final_time) %>%
+  mutate(horse = str_trim(horse)) %>%
+  rename(horse_name = horse) %>%
   nest(data = everything()) %>%
   mutate(model = map(data, ~lm(speed ~ bSpline(distance,knots = c(2,6,8)), data = .))) %>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
   unnest(cols = c(final)) %>%
-  group_by(rc_track, rc_date, rc_race, horse) %>%
-  summarise(median_std_resid  = median(.std.resid),
-            max_std_resid = max(.std.resid),
-            min_std_resid = min(.std.resid),
-            max_purse = max(purse), 
-            min_purse = min(purse), 
+  mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj)) %>%
+  group_by(rc_track, rc_date, rc_race, horse_name) %>%
+  summarise(median_std_resid  = round(median(.std.resid),3),
             median_purse = median(purse),
             no_finish = sum(final_call_len_adj == 99.99),
             median_length_behind  = median(final_call_len_adj[final_call_len_adj != 99.99]),
             median_length_behind = replace_na(median_length_behind, 99.99),
             races_run = n(),
-            races_won = sum(final_call == 1),
             )
 
+# Final Feature Set
+
+all_features<-starter_features %>%
+  left_join(spline_features) %>%
+  left_join(betting) %>%
+  mutate(odds_movement = round(odds - ml_odds, 3)) %>%
+  select(-ml_odds) %>%
+  left_join(horses) %>%
+  left_join(special) %>%
+  left_join(races_features) %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  mutate(remove = sum(is.na(races_run)) > 0) %>%
+  ungroup() %>%
+  filter(remove != TRUE) %>%
+  # Removed Variables with high pairwise correlation
+  select(-remove, 
+         -bute, 
+         -d_earnings, 
+         -jt_track_starts, 
+         -jt_track_earnings, 
+         -jt_track_win_pct, 
+         -d_money, 
+         -d_money_pct, 
+         -best_fast_dirt, 
+         -best_current_year,
+         -best_prior_year,
+         -horse_name) %>%
+  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, speed_number, post_position) 
+
+
+all_features %>%
+  select_if(is.numeric) %>%
+  select(-odds_movement, -rc_race, -speed_number, -distance) %>%
+  cor() %>%
+  round(., 2) %>%
+  ggcorrplot(.,
+             method = 'circle',
+             type = "lower",
+             outline.color = "white")
+
+all_features %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  count()
+
+#Build Final Dataset
+
+check<-all_features %>%
+  pivot_wider(
+    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, speed_number),
+    names_from = post_position,
+    names_sort = TRUE,
+    names_glue = 'horse_{post_position}_{.value}',
+    values_from = odds:best_lifetime) %>%
+  mutate(across(contains('')))
