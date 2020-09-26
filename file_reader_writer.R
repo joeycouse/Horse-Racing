@@ -4,6 +4,7 @@ library(janitor)
 library(lubridate)
 library(splines2)
 library(ggcorrplot)
+library(feather)
 
 
 # To Do:
@@ -293,8 +294,12 @@ all_features<-starter_features %>%
          -best_fast_dirt, 
          -best_current_year,
          -best_prior_year,
-         -horse_name) %>%
-  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, speed_number, post_position) 
+         -horse_name,
+         -lasix,
+         -best_turf,
+         -best_wet,
+         -speed_number) %>%
+  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, post_position) 
 
 
 all_features %>%
@@ -313,11 +318,36 @@ all_features %>%
 
 #Build Final Dataset
 
-check<-all_features %>%
+final_features<-all_features %>%
   pivot_wider(
-    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, speed_number),
+    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition),
     names_from = post_position,
     names_sort = TRUE,
     names_glue = 'horse_{post_position}_{.value}',
     values_from = odds:best_lifetime) %>%
-  mutate(across(contains('')))
+  mutate(
+    across(contains('std_resid'), ~replace_na(.x, -99.99)),
+    across(matches('odds_movement'), ~replace_na(.x, 0)),
+    across(ends_with('odds'), ~replace_na(.x, 0)),
+    across(ends_with('favorite'), ~replace_na(.x, -1)),
+    across(ends_with('purse'), ~replace_na(.x, -1)),
+    across(ends_with('no_finish'), ~replace_na(.x, -1)),
+    across(ends_with('length_behind'), ~replace_na(.x, 99.99)),
+    across(ends_with('races_run'), ~replace_na(.x, -1)),
+    across(ends_with('weight'), ~replace_na(.x, -1)),
+    across(ends_with('years_old'), ~replace_na(.x,-1)),
+    across(ends_with('last_race'), ~replace_na(.x,-1)),
+    across(ends_with('earnings'), ~replace_na(.x, -1)),
+    across(ends_with('all_starts'), ~replace_na(.x, -1)),
+    across(ends_with('win_pct'), ~replace_na(.x, -1)),
+    across(ends_with('money'), ~replace_na(.x, -1)),
+    across(ends_with('money_pct'), ~replace_na(.x, -1)),
+    across(ends_with('all_roi'), ~replace_na(.x, -1)),
+    across(contains('best'), ~replace_na(.x,-1)),
+    )
+
+# Add in final race results
+final_df<-final_features %>%
+  inner_join(race_results)
+
+write_feather(final_df, '~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
