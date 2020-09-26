@@ -7,13 +7,6 @@ library(ggcorrplot)
 library(feather)
 
 
-# To Do:
-# Clean up Running Line File
-# Condense rows into single row
-# Make Function that generates additional variables
-# Win percentage, last time raced, horse age, etc
-# Generate Dependent Variable Set
-
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch')
@@ -349,5 +342,7 @@ final_features<-all_features %>%
 # Add in final race results
 final_df<-final_features %>%
   inner_join(race_results)
+
+#rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
 write_feather(final_df, '~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
