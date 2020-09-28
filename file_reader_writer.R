@@ -7,6 +7,7 @@ library(ggcorrplot)
 library(feather)
 
 
+
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch')
@@ -226,13 +227,9 @@ races_features <- races %>%
 race_results <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race')) %>%
   filter(finish_position == 1) %>%
-  select(rc_track, rc_date, rc_race, finish_position, post_position) %>%
-  pivot_wider(
-    names_from = post_position,
-    names_glue = 'horse_{post_position}_win',
-    names_sort = TRUE,
-    values_from = finish_position,
-    values_fill = 0)
+  select(rc_track, rc_date, rc_race, post_position) %>%
+  rename(winning_horse = post_position)
+
 
 starter_features <- starters %>%
   select(rc_track, rc_date, rc_race, horse_name, odds, favorite, post_position) %>%
@@ -287,7 +284,6 @@ all_features<-starter_features %>%
          -best_fast_dirt, 
          -best_current_year,
          -best_prior_year,
-         -horse_name,
          -lasix,
          -best_turf,
          -best_wet,
@@ -295,29 +291,194 @@ all_features<-starter_features %>%
   relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, post_position) 
 
 
-all_features %>%
+correlation<-all_features %>%
   select_if(is.numeric) %>%
-  select(-odds_movement, -rc_race, -speed_number, -distance) %>%
+  select(-odds_movement, -rc_race, -distance, -post_position, -purse) %>%
   cor() %>%
-  round(., 2) %>%
-  ggcorrplot(.,
-             method = 'circle',
-             type = "lower",
-             outline.color = "white")
+  as_tibble(rownames = 'var1') %>%
+  pivot_longer(-var1, names_to = 'var2', values_to = 'correlation') %>%
+  group_by(correlation) %>%
+  filter(row_number() == 1, correlation != 1) %>%
+  ungroup() %>%
+  arrange(desc(correlation))
 
-all_features %>%
+
+# PCA Dimension Reduction
+###############
+
+#Just the t_variables
+pc_t<-prcomp(all_features %>%
+         select(starts_with('t_')),
+       center = T,
+       scale. = T
+       )
+# Two PC explain 90% + variance, only using two
+summary(pc_t)
+
+loadings_t<-pc_t$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_t = PC1,
+         PC2_t = PC2)
+
+#Just the dist_variables
+pc_dist<-prcomp(all_features %>%
+               select(starts_with('dist_')),
+             center = T,
+             scale. = T
+)
+# Two PC explain 89% + variance, only using two
+summary(pc_dist)
+
+loadings_dist<-pc_dist$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_dist = PC1,
+         PC2_dist = PC2)
+
+#Just the lt_variables
+pc_lt<-prcomp(all_features %>%
+                  select(starts_with('lt_')),
+                center = T,
+                scale. = T
+)
+
+# Two PC explain 85% + variance, only using two
+summary(pc_lt)
+
+loadings_lt<-pc_lt$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_lt = PC1,
+         PC2_lt = PC2)
+
+#Just the w_variables
+pc_w<-prcomp(all_features %>%
+                select(starts_with('w_')),
+              center = T,
+              scale. = T
+)
+
+# Two PC explain 90% + variance, only using two
+summary(pc_w)
+
+loadings_w<-pc_w$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_w = PC1,
+         PC2_w = PC2)
+
+#Just the cy_variables
+pc_cy<-prcomp(all_features %>%
+               select(starts_with('cy_')),
+             center = T,
+             scale. = T
+)
+
+# Two PC explain 89% + variance, only using two
+summary(pc_cy)
+
+loadings_cy<-pc_cy$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_cy = PC1,
+         PC2_cy = PC2)
+
+#Just the py_variables
+pc_py<-prcomp(all_features %>%
+                select(starts_with('py_')),
+              center = T,
+              scale. = T
+)
+
+# Two PC explain 90% + variance, only using two
+summary(pc_py)
+
+loadings_py<-pc_py$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_py = PC1,
+         PC2_py = PC2)
+
+#Just the trk_variables
+pc_trk<-prcomp(all_features %>%
+                select(starts_with('trk_')),
+              center = T,
+              scale. = T
+)
+
+# Two PC explain 88% + variance, only using two
+summary(pc_trk)
+
+loadings_trk<-pc_trk$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_trk = PC1,
+         PC2_trk = PC2)
+
+#Just the best_variables
+pc_best<-prcomp(all_features %>%
+                 select(starts_with('best_')),
+               center = T,
+               scale. = T
+)
+
+# One PC explain 87% + variance, only using two
+summary(pc_best)
+
+loadings_best<-pc_best$x %>%
+  as_tibble() %>%
+  select(PC1) %>%
+  rename(PC1_best = PC1)
+
+#Just the jt_variables
+pc_jt<-prcomp(all_features %>%
+                 select(starts_with('jt_')),
+               center = T,
+               scale. = T
+)
+
+# Two PC explain 87% + variance, only using two
+summary(pc_jt)
+
+loadings_jt<-pc_jt$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_jt = PC1,
+         PC2_jt = PC2)
+
+ 
+###############
+
+pca_features<-all_features %>%
+  select(-starts_with('cy_'),
+         -starts_with('py_'),
+         -starts_with('lt_'),
+         -starts_with('jt_'),
+         -starts_with('best_'),
+         -starts_with('dist_'),
+         -starts_with('t_'),
+         -starts_with('w_'),
+         -starts_with('trk_')) %>%
+  bind_cols(c(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk))
+
+rm(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk)
+rm(pc_best, pc_cy, pc_dist, pc_jt, pc_lt, pc_py, pc_t, pc_trk, pc_w)
+
+
+pca_features %>%
   group_by(rc_track, rc_date, rc_race) %>%
   count()
 
 #Build Final Dataset
 
-final_features<-all_features %>%
+final_features<-pca_features %>%
   pivot_wider(
     id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition),
     names_from = post_position,
     names_sort = TRUE,
     names_glue = 'horse_{post_position}_{.value}',
-    values_from = odds:best_lifetime) %>%
+    values_from = horse_name:PC2_trk) %>%
   mutate(
     across(contains('std_resid'), ~replace_na(.x, -99.99)),
     across(matches('odds_movement'), ~replace_na(.x, 0)),
@@ -330,18 +491,14 @@ final_features<-all_features %>%
     across(ends_with('weight'), ~replace_na(.x, -1)),
     across(ends_with('years_old'), ~replace_na(.x,-1)),
     across(ends_with('last_race'), ~replace_na(.x,-1)),
-    across(ends_with('earnings'), ~replace_na(.x, -1)),
-    across(ends_with('all_starts'), ~replace_na(.x, -1)),
-    across(ends_with('win_pct'), ~replace_na(.x, -1)),
-    across(ends_with('money'), ~replace_na(.x, -1)),
-    across(ends_with('money_pct'), ~replace_na(.x, -1)),
-    across(ends_with('all_roi'), ~replace_na(.x, -1)),
-    across(contains('best'), ~replace_na(.x,-1)),
+    across(contains('PC1'), ~replace_na(.x, -1)),
+    across(contains('PC2'), ~replace_na(.x, -1))
     )
 
 # Add in final race results
 final_df<-final_features %>%
-  inner_join(race_results)
+  inner_join(race_results) %>%
+  relocate(ends_with('horse_name') , .after = 'rc_race')
 
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
