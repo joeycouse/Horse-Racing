@@ -236,7 +236,7 @@ starter_features <- starters %>%
   mutate(horse_name = str_trim(horse_name)) %>%
   mutate(odds = 100/(odds+100)) %>%
   group_by(rc_track, rc_date, rc_race) %>%
-  mutate(odds = round(odds/sum(odds), 3), favorite = if_else(favorite == 'Y',1,0)) 
+  mutate(odds = round(odds/sum(odds), 3), favorite_horse = if_else(favorite == 'Y',post_position,0), .keep = 'unused') 
 
 # Fitting cubic spline for distance vs speed function
 
