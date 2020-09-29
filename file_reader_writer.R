@@ -7,7 +7,6 @@ library(ggcorrplot)
 library(feather)
 
 
-
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch')
@@ -200,6 +199,8 @@ special <- map_df(special_files, ~read_csv(., trim_ws = TRUE,
   rename(horse_name = horse) %>%
   select(rc_track, rc_date, rc_race, horse_name ,starts_with('best')) %>%
   select(-best_track_surface)
+
+
 ###############################
 
 # Returning dataframes and filtering to contain matches from both datasets
@@ -216,7 +217,7 @@ starters <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
 
 races_features <- races %>%
-  select(rc_track, rc_date, rc_race, race_type, purse, distance, distance_unit, surface, track_condition, speed_number) %>%
+  select(rc_track, rc_date, rc_race, race_type, purse, distance, distance_unit, surface, track_condition) %>%
   mutate(distance_unit = if_else(is.na(distance_unit) | distance_unit == 'M' | distance_unit == 'F', 'F', 'Y'),
          distance = round(distance/100,2)) %>%
   mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 2), distance)) %>%
@@ -225,18 +226,20 @@ races_features <- races %>%
 # Dependent variable generation and additional column generation
 
 race_results <- starters %>%
-  semi_join(races, by = c('rc_track', 'rc_date', 'rc_race')) %>%
+  left_join(races, by = c('rc_track', 'rc_date', 'rc_race')) %>%
   filter(finish_position == 1) %>%
   select(rc_track, rc_date, rc_race, post_position) %>%
   rename(winning_horse = post_position)
-
 
 starter_features <- starters %>%
   select(rc_track, rc_date, rc_race, horse_name, odds, favorite, post_position) %>%
   mutate(horse_name = str_trim(horse_name)) %>%
   mutate(odds = 100/(odds+100)) %>%
   group_by(rc_track, rc_date, rc_race) %>%
-  mutate(odds = round(odds/sum(odds), 3), favorite_horse = if_else(favorite == 'Y',post_position,0), .keep = 'unused') 
+  mutate(odds = round(odds/sum(odds), 3), favorite_horse = if_else(favorite == 'Y',post_position,0)) %>%
+  select(-favorite) %>%
+  mutate(favorite_horse = na_if(favorite_horse,0))
+
 
 # Fitting cubic spline for distance vs speed function
 
@@ -260,7 +263,15 @@ spline_features <- running_lines %>%
 
 # Final Feature Set
 
-all_features<-starter_features %>%
+# in work
+look<-starter_features %>%
+  group_by(rc_track, rc_race, rc_date) %>%
+  mutate( test= sum(!is.na(favorite_horse))) %>%
+  filter(test >=2)
+
+
+
+all_features<- starter_features %>%
   left_join(spline_features) %>%
   left_join(betting) %>%
   mutate(odds_movement = round(odds - ml_odds, 3)) %>%
@@ -288,7 +299,7 @@ all_features<-starter_features %>%
          -best_turf,
          -best_wet,
          -speed_number) %>%
-  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, post_position) 
+  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, favorite_horse, post_position)
 
 
 correlation<-all_features %>%
@@ -474,7 +485,7 @@ pca_features %>%
 
 final_features<-pca_features %>%
   pivot_wider(
-    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition),
+    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, favorite_horse),
     names_from = post_position,
     names_sort = TRUE,
     names_glue = 'horse_{post_position}_{.value}',
@@ -497,8 +508,25 @@ final_features<-pca_features %>%
 
 # Add in final race results
 final_df<-final_features %>%
-  inner_join(race_results) %>%
+  left_join(race_results) %>%
   relocate(ends_with('horse_name') , .after = 'rc_race')
+
+look<-race_results %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  filter(sum(n()) == 2)
+
+
+check <- race_results %>%
+  full_join(final_features) %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  mutate( times  = n()) %>%
+  filter(times == 2) 
+
+
+look<-final_df %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  mutate( times  = n()) %>%
+  filter(times == 2) 
 
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
