@@ -2,11 +2,13 @@ library(feather)
 library(tidyverse)
 library(tidymodels)
 library(themis)
+library(doParallel)
 
-df <- read_feather('~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
+df <- read_feather('~/Data Science/Horse Racing/Horse Racing - R/final_df.feather') %>%
+  relocate(ends_with('horse_name'), .before = everything())
 
 horse_names <- df %>%
-  select(rc_track:horse_12_horse_name)
+  select(horse_1_horse_name:horse_12_horse_name)
 
 df <- df %>%
   filter(winning_horse != 12) %>%
@@ -17,8 +19,14 @@ df <- df %>%
   select(-contains('horse_name')) %>%
   mutate(winning_horse = as.factor(winning_horse))
 
+# Baseline Accuracy to Beat:
+df %>%
+  summarise(favorite_wins = sum(favorite == winning_horse),
+            total_races = n(),
+            score_to_beat = favorite_wins/total_races)
+
 splits <- initial_split(df, prop = 0.75, strata = purse)
-folds <- vfold_cv(training(splits), v = 5)
+folds <- vfold_cv(training(splits), v = 10)
 
 horse_recipe <-
   recipe(winning_horse ~ . , data = training(splits)) %>%
@@ -26,7 +34,50 @@ horse_recipe <-
   step_dummy(all_nominal(), -all_outcomes(), -rc_track) %>%
   step_zv(all_predictors()) %>%
   step_upsample(winning_horse, over_ratio = 0.5)
-  
+
+###################
+
+xgboost_model <-
+  boost_tree(trees = 1000,
+             mtry = tune(),
+             min_n =  tune(),
+             tree_depth = tune(),
+             learn_rate = tune(),
+             loss_reduction = tune(),
+             sample_size =  1) %>%
+  set_engine('xgboost', seed = 24) %>%
+  set_mode('classification')
+
+xgb_wrk_fl <-
+  workflow() %>%
+  add_recipe(horse_recipe) %>%
+  add_model(xgboost_model)
+
+my_grid <- 
+  grid_latin_hypercube(finalize(mtry(), training(splits)),
+                   min_n(),
+                   tree_depth(),
+                   learn_rate(),
+                   loss_reduction(),
+                   size = 50)
+
+doParallel::registerDoParallel()
+
+xgb_results <-
+  xgb_wrk_fl %>%
+  tune_grid(resamples = folds,
+            grid = my_grid,
+            metrics = metric_set(accuracy),
+            control = control_grid(verbose = TRUE))
+
+xgb_results %>% 
+  collect_metrics() %>% 
+  top_n(5, mean) %>%
+  arrange(desc(mean))
+
+
+############### random forest 
+
 rf <- rand_forest(trees = 1000) %>%
   set_engine('ranger') %>%
   set_mode('classification')
@@ -45,45 +96,5 @@ rf_res <- rf_wrk %>%
   )
 
 
-rf_res$.notes[[1]]
-
-###################
-xgboost_model <-
-  boost_tree(trees = 1000,
-             mtry = tune(),
-             min_n =  tune(),
-             tree_depth = tune(),
-             learn_rate = tune(),
-             sample_size = tune(),
-             loss_reduction = tune()) %>%
-  set_engine('xgboost', seed = 24) %>%
-  set_mode('classification')
-
-xgb_wrk_fl <-
-  workflow() %>%
-  add_recipe(horse_recipe) %>%
-  add_model(xgboost_model)
-
-
-my_grid <- 
-  grid_max_entropy(finalize(mtry(), training(splits)),
-                   min_n(),
-                   tree_depth(),
-                   learn_rate(),
-                   loss_reduction(),
-                   sample_size = sample_prop(range = c(0.4,1)),
-                   size = 6)
-
-xgb_results <-
-  xgb_wrk_fl %>%
-  tune_grid(resamples = folds,
-            grid = my_grid,
-            metrics = metric_set(accuracy),
-            control = control_grid(verbose = TRUE))
-
-xgb_results %>% 
-  collect_metrics() %>% 
-  top_n(5, mean) %>%
-  arrange(desc(mean))
-
-
+rf_res %>%
+  collect_metrics()

@@ -6,7 +6,6 @@ library(splines2)
 library(ggcorrplot)
 library(feather)
 
-
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch')
@@ -46,7 +45,12 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
              age_restrictions = as.factor(age_restrictions),
              track_condition = as.factor(track_condition)) %>%
       select(-starts_with('X')) %>%
-      type_convert()
+      type_convert() %>%  
+      select(rc_track, rc_date, rc_race, race_type, num_horses, purse, distance, distance_unit, surface, track_condition) %>%
+      mutate(distance_unit = if_else(is.na(distance_unit) | distance_unit == 'M' | distance_unit == 'F', 'F', 'Y'),
+             distance = round(distance/100,2)) %>%
+      mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 2), distance)) %>%
+      select(-distance_unit, -race_type)
     
     all_races <- bind_rows(all_races, races)
   
@@ -216,30 +220,32 @@ races <- races %>%
 starters <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
 
-races_features <- races %>%
-  select(rc_track, rc_date, rc_race, race_type, purse, distance, distance_unit, surface, track_condition) %>%
-  mutate(distance_unit = if_else(is.na(distance_unit) | distance_unit == 'M' | distance_unit == 'F', 'F', 'Y'),
-         distance = round(distance/100,2)) %>%
-  mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 2), distance)) %>%
-  select(-distance_unit, -race_type)
-
 # Dependent variable generation and additional column generation
 
+favorites <- starters %>%
+  select(rc_track, rc_date, rc_race, favorite, post_position) %>%
+  mutate(favorite = ifelse(favorite == 'Y', post_position, NA)) %>%
+  select(-post_position) %>%
+  drop_na(favorite)
+ 
 race_results <- starters %>%
-  left_join(races, by = c('rc_track', 'rc_date', 'rc_race')) %>%
   filter(finish_position == 1) %>%
   select(rc_track, rc_date, rc_race, post_position) %>%
   rename(winning_horse = post_position)
 
+races_features <- race_results %>%
+  full_join(favorites) %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  left_join(races)
+
+rm(favorites, race_results)
+ 
 starter_features <- starters %>%
-  select(rc_track, rc_date, rc_race, horse_name, odds, favorite, post_position) %>%
+  select(rc_track, rc_date, rc_race, horse_name, odds, post_position) %>%
   mutate(horse_name = str_trim(horse_name)) %>%
   mutate(odds = 100/(odds+100)) %>%
   group_by(rc_track, rc_date, rc_race) %>%
-  mutate(odds = round(odds/sum(odds), 3), favorite_horse = if_else(favorite == 'Y',post_position,0)) %>%
-  select(-favorite) %>%
-  mutate(favorite_horse = na_if(favorite_horse,0))
-
+  mutate(odds = round(odds/sum(odds), 3))
 
 # Fitting cubic spline for distance vs speed function
 
@@ -261,46 +267,30 @@ spline_features <- running_lines %>%
             races_run = n(),
             )
 
+
+races_features %>%
+  group_by(track_condition) %>%
+  count(  prop = n()/sum(nrow(.))) %>%
+  arrange(desc(prop))
+
 # Final Feature Set
+# order of joins matter!
 
-# in work
-look<-starter_features %>%
-  group_by(rc_track, rc_race, rc_date) %>%
-  mutate( test= sum(!is.na(favorite_horse))) %>%
-  filter(test >=2)
-
-
-
-all_features<- starter_features %>%
-  left_join(spline_features) %>%
-  left_join(betting) %>%
+all_features <- races_features %>%
+  left_join(starter_features) %>%
+  left_join(betting)  %>%
   mutate(odds_movement = round(odds - ml_odds, 3)) %>%
   select(-ml_odds) %>%
-  left_join(horses) %>%
   left_join(special) %>%
-  left_join(races_features) %>%
+  left_join(horses) %>%
+  left_join(spline_features) %>%
   group_by(rc_track, rc_date, rc_race) %>%
-  mutate(remove = sum(is.na(races_run)) > 0) %>%
-  ungroup() %>%
+  mutate(remove = sum(is.na(races_run)) > 0)%>%
   filter(remove != TRUE) %>%
-  # Removed Variables with high pairwise correlation
-  select(-remove, 
-         -bute, 
-         -d_earnings, 
-         -jt_track_starts, 
-         -jt_track_earnings, 
-         -jt_track_win_pct, 
-         -d_money, 
-         -d_money_pct, 
-         -best_fast_dirt, 
-         -best_current_year,
-         -best_prior_year,
-         -lasix,
-         -best_turf,
-         -best_wet,
-         -speed_number) %>%
-  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, favorite_horse, post_position)
-
+  select(-remove, -num_horses) %>%
+  mutate(lasix = ifelse(lasix == 'l' | lasix == 'L', 'L', NA)) %>%
+  relocate(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, favorite, post_position) %>%
+  ungroup()
 
 correlation<-all_features %>%
   select_if(is.numeric) %>%
@@ -439,8 +429,10 @@ summary(pc_best)
 
 loadings_best<-pc_best$x %>%
   as_tibble() %>%
-  select(PC1) %>%
-  rename(PC1_best = PC1)
+  select(PC1, PC2, PC3) %>%
+  rename(PC1_best = PC1,
+         PC2_best = PC2,
+         PC3_best = PC3)
 
 #Just the jt_variables
 pc_jt<-prcomp(all_features %>%
@@ -449,14 +441,31 @@ pc_jt<-prcomp(all_features %>%
                scale. = T
 )
 
-# Two PC explain 87% + variance, only using two
+# Three PC explain 8% + variance, only using two
 summary(pc_jt)
 
 loadings_jt<-pc_jt$x %>%
   as_tibble() %>%
-  select(PC1, PC2) %>%
+  select(PC1, PC2, PC3) %>%
   rename(PC1_jt = PC1,
-         PC2_jt = PC2)
+         PC2_jt = PC2,
+         PC3_jt = PC3)
+
+#Just the d_variables
+pc_d<-prcomp(all_features %>%
+                select(starts_with('d_')),
+              center = T,
+              scale. = T
+)
+
+# Two PC explain 85% + variance, only using two
+summary(pc_d)
+
+loadings_d<-pc_d$x %>%
+  as_tibble() %>%
+  select(PC1, PC2) %>%
+  rename(PC1_d = PC1,
+         PC2_d = PC2)
 
  
 ###############
@@ -466,16 +475,19 @@ pca_features<-all_features %>%
          -starts_with('py_'),
          -starts_with('lt_'),
          -starts_with('jt_'),
+         -starts_with('d_'),
          -starts_with('best_'),
          -starts_with('dist_'),
          -starts_with('t_'),
          -starts_with('w_'),
          -starts_with('trk_')) %>%
-  bind_cols(c(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk))
+  bind_cols(c(loadings_lt, loadings_best, loadings_jt, loadings_dist, loadings_d, loadings_t)) %>%
+  mutate(PC1_surface = if_else(surface == 'D', PC1_d, PC1_t),
+         PC2_surface = if_else(surface == 'D', PC2_d, PC2_t)) %>%
+  select(-PC1_d, -PC2_d, -PC1_t, -PC2_t, -no_finish, -bute, -lasix)
 
-rm(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk)
-rm(pc_best, pc_cy, pc_dist, pc_jt, pc_lt, pc_py, pc_t, pc_trk, pc_w)
-
+rm(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk, loadings_d)
+rm(pc_best, pc_cy, pc_dist, pc_jt, pc_lt, pc_py, pc_t, pc_trk, pc_w, pc_d)
 
 pca_features %>%
   group_by(rc_track, rc_date, rc_race) %>%
@@ -483,18 +495,49 @@ pca_features %>%
 
 #Build Final Dataset
 
-final_features<-pca_features %>%
+final_features <- pca_features %>%
   pivot_wider(
-    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, favorite_horse),
+    id_cols = c(rc_track, rc_date, rc_race, purse, distance, surface, track_condition, favorite, winning_horse),
     names_from = post_position,
     names_sort = TRUE,
     names_glue = 'horse_{post_position}_{.value}',
-    values_from = horse_name:PC2_trk) %>%
+    values_from = horse_name:PC2_surface) %>%
+  rowwise() %>%
+  mutate(weight_mean = mean(c_across(ends_with('weight')), na.rm = T),
+         purse_mean = mean(c_across(ends_with('median_purse')), na.rm = T),
+         age_mean = mean(c_across(ends_with('years_old')), na.rm = T),
+         days_since_race_mean = mean(c_across(ends_with('days_since_last_race')), na.rm = T),
+         std_resid_mean = mean(c_across(ends_with('std_resid')), na.rm = T),
+         races_run_mean = mean(c_across(ends_with('races_run')), na.rm = T),
+         length_behind_mean = mean(c_across(ends_with('length_behind')), na.rm = T),
+         PC1_lt_mean = mean(c_across(ends_with('PC1_lt')), na.rm = T),
+         PC2_lt_mean = mean(c_across(ends_with('PC2_lt')), na.rm = T),
+         PC1_best_mean = mean(c_across(ends_with('PC1_best')), na.rm = T),
+         PC2_best_mean = mean(c_across(ends_with('PC2_best')), na.rm = T),
+         PC1_jt_mean = mean(c_across(ends_with('PC1_jt')), na.rm = T),
+         PC2_jt_mean = mean(c_across(ends_with('PC2_jt')), na.rm = T),
+         PC3_lt_mean = mean(c_across(ends_with('PC3_jt')), na.rm = T),
+         PC1_dist_mean = mean(c_across(ends_with('PC1_dist')), na.rm = T),
+         PC2_dist_mean = mean(c_across(ends_with('PC2_dist')), na.rm = T),
+         PC1_surface_mean = mean(c_across(ends_with('PC1_surface')), na.rm = T),
+         PC2_surface_mean = mean(c_across(ends_with('PC2_surface')), na.rm = T)
+        ) %>%
+  ungroup() %>%
+  mutate(across(ends_with('weight'), ~ifelse(is.na(.x), NA, .x - weight_mean))
+         )
+
+
+
+
+
+
+
+
+%>%
   mutate(
     across(contains('std_resid'), ~replace_na(.x, -99.99)),
     across(matches('odds_movement'), ~replace_na(.x, 0)),
     across(ends_with('odds'), ~replace_na(.x, 0)),
-    across(ends_with('favorite'), ~replace_na(.x, -1)),
     across(ends_with('purse'), ~replace_na(.x, -1)),
     across(ends_with('no_finish'), ~replace_na(.x, -1)),
     across(ends_with('length_behind'), ~replace_na(.x, 99.99)),
@@ -502,32 +545,13 @@ final_features<-pca_features %>%
     across(ends_with('weight'), ~replace_na(.x, -1)),
     across(ends_with('years_old'), ~replace_na(.x,-1)),
     across(ends_with('last_race'), ~replace_na(.x,-1)),
-    across(contains('PC1'), ~replace_na(.x, -1)),
-    across(contains('PC2'), ~replace_na(.x, -1))
-    )
-
-# Add in final race results
-final_df<-final_features %>%
-  left_join(race_results) %>%
-  relocate(ends_with('horse_name') , .after = 'rc_race')
-
-look<-race_results %>%
-  group_by(rc_track, rc_date, rc_race) %>%
-  filter(sum(n()) == 2)
-
-
-check <- race_results %>%
-  full_join(final_features) %>%
-  group_by(rc_track, rc_date, rc_race) %>%
-  mutate( times  = n()) %>%
-  filter(times == 2) 
-
-
-look<-final_df %>%
-  group_by(rc_track, rc_date, rc_race) %>%
-  mutate( times  = n()) %>%
-  filter(times == 2) 
+    across(contains('PC1'), ~replace_na(.x, -99)),
+    across(contains('PC2'), ~replace_na(.x, -99)),
+    across(contains('PC3'), ~replace_na(.x, -99))
+    ) %>%
+  relocate(winning_horse, .after = everything()) %>%
+  relocate(ends_with('horse_name'), .before = everything())
 
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
-write_feather(final_df, '~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
+write_feather(final_features, '~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
