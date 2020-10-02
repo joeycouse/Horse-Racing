@@ -3,6 +3,8 @@ library(tidyverse)
 library(tidymodels)
 library(themis)
 library(doParallel)
+all_cores <- parallel::detectCores(logical = FALSE)
+registerDoParallel(cores = all_cores)
 
 df <- read_feather('~/Data Science/Horse Racing/Horse Racing - R/final_df.feather') %>%
   relocate(ends_with('horse_name'), .before = everything())
@@ -35,17 +37,22 @@ horse_recipe <-
   step_zv(all_predictors()) %>%
   step_upsample(winning_horse, over_ratio = 0.5)
 
-###################
+###############################################################################
+
+# XGBoost Modeling Probably Takes Forever
 
 xgboost_model <-
-  boost_tree(trees = 1000,
+  boost_tree(trees = 1200,
              mtry = tune(),
              min_n =  tune(),
              tree_depth = tune(),
              learn_rate = tune(),
              loss_reduction = tune(),
-             sample_size =  1) %>%
-  set_engine('xgboost', seed = 24) %>%
+             sample_size =  tune()) %>%
+  set_engine('xgboost', 
+             set.seed = 24,
+             objective = "multi:softmax",
+             num_class = 12) %>%
   set_mode('classification')
 
 xgb_wrk_fl <-
@@ -59,9 +66,8 @@ my_grid <-
                    tree_depth(),
                    learn_rate(),
                    loss_reduction(),
+                   sample_size = sample_prop(),
                    size = 50)
-
-doParallel::registerDoParallel()
 
 xgb_results <-
   xgb_wrk_fl %>%
@@ -70,31 +76,10 @@ xgb_results <-
             metrics = metric_set(accuracy),
             control = control_grid(verbose = TRUE))
 
+
 xgb_results %>% 
   collect_metrics() %>% 
   top_n(5, mean) %>%
   arrange(desc(mean))
 
 
-############### random forest 
-
-rf <- rand_forest(trees = 1000) %>%
-  set_engine('ranger') %>%
-  set_mode('classification')
-
-
-rf_wrk <-
-  workflow() %>%
-  add_recipe(horse_recipe) %>%
-  add_model(rf)
-
-
-rf_res <- rf_wrk %>%
-  fit_resamples(resamples = folds,
-                control = control_resamples(verbose = T,
-                                            save_pred =  T)
-  )
-
-
-rf_res %>%
-  collect_metrics()

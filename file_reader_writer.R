@@ -258,7 +258,7 @@ spline_features <- running_lines %>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
   unnest(cols = c(final)) %>%
   mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj)) %>%
-  group_by(rc_track, rc_date, rc_race, horse_name) %>%
+  group_by(rc_track, rc_date, rc_race, horse_name)%>%
   summarise(median_std_resid  = round(median(.std.resid),3),
             median_purse = median(purse),
             no_finish = sum(final_call_len_adj == 99.99),
@@ -516,35 +516,43 @@ final_features <- pca_features %>%
          PC2_best_mean = mean(c_across(ends_with('PC2_best')), na.rm = T),
          PC1_jt_mean = mean(c_across(ends_with('PC1_jt')), na.rm = T),
          PC2_jt_mean = mean(c_across(ends_with('PC2_jt')), na.rm = T),
-         PC3_lt_mean = mean(c_across(ends_with('PC3_jt')), na.rm = T),
+         PC3_jt_mean = mean(c_across(ends_with('PC3_jt')), na.rm = T),
          PC1_dist_mean = mean(c_across(ends_with('PC1_dist')), na.rm = T),
          PC2_dist_mean = mean(c_across(ends_with('PC2_dist')), na.rm = T),
          PC1_surface_mean = mean(c_across(ends_with('PC1_surface')), na.rm = T),
          PC2_surface_mean = mean(c_across(ends_with('PC2_surface')), na.rm = T)
         ) %>%
   ungroup() %>%
-  mutate(across(ends_with('weight'), ~ifelse(is.na(.x), NA, .x - weight_mean))
-         )
-
-
-
-
-
-
-
-
-%>%
+  mutate(across(ends_with('weight'), ~ifelse(is.na(.x), NA, .x - weight_mean)),
+         across(ends_with('median_purse'), ~ifelse(is.na(.x), NA, .x - purse_mean)),
+         across(ends_with('years_old'), ~ifelse(is.na(.x), NA, .x - age_mean)),
+         across(ends_with('days_since_last_race'), ~ifelse(is.na(.x), NA, .x - days_since_race_mean)),
+         across(ends_with('std_resid'), ~ifelse(is.na(.x), NA, .x - std_resid_mean)),
+         across(ends_with('races_run'), ~ifelse(is.na(.x), NA, .x - races_run_mean)),
+         across(ends_with('length_behind'), ~ifelse(is.na(.x), NA, .x - length_behind_mean)),
+         across(ends_with('PC1_lt'), ~ifelse(is.na(.x), NA, .x - PC1_lt_mean)),
+         across(ends_with('PC2_lt'), ~ifelse(is.na(.x), NA, .x - PC2_lt_mean)),
+         across(ends_with('PC1_best'), ~ifelse(is.na(.x), NA, .x - PC1_best_mean)),
+         across(ends_with('PC2_best'), ~ifelse(is.na(.x), NA, .x - PC2_best_mean)),
+         across(ends_with('PC1_jt'), ~ifelse(is.na(.x), NA, .x - PC1_jt_mean)),
+         across(ends_with('PC2_jt'), ~ifelse(is.na(.x), NA, .x - PC2_jt_mean)),
+         across(ends_with('PC3_jt'), ~ifelse(is.na(.x), NA, .x - PC3_jt_mean)),
+         across(ends_with('PC1_dist'), ~ifelse(is.na(.x), NA, .x - PC1_dist_mean)),
+         across(ends_with('PC2_dist'), ~ifelse(is.na(.x), NA, .x - PC2_dist_mean)),
+         across(ends_with('PC1_surface'), ~ifelse(is.na(.x), NA, .x - PC1_surface_mean)),
+         across(ends_with('PC2_surface'), ~ifelse(is.na(.x), NA, .x - PC2_surface_mean))
+         ) %>%
+  select(-ends_with('mean')) %>%
   mutate(
     across(contains('std_resid'), ~replace_na(.x, -99.99)),
     across(matches('odds_movement'), ~replace_na(.x, 0)),
     across(ends_with('odds'), ~replace_na(.x, 0)),
-    across(ends_with('purse'), ~replace_na(.x, -1)),
-    across(ends_with('no_finish'), ~replace_na(.x, -1)),
+    across(ends_with('purse'), ~replace_na(.x, -9999)),
     across(ends_with('length_behind'), ~replace_na(.x, 99.99)),
-    across(ends_with('races_run'), ~replace_na(.x, -1)),
-    across(ends_with('weight'), ~replace_na(.x, -1)),
-    across(ends_with('years_old'), ~replace_na(.x,-1)),
-    across(ends_with('last_race'), ~replace_na(.x,-1)),
+    across(ends_with('races_run'), ~replace_na(.x, -999)),
+    across(ends_with('weight'), ~replace_na(.x, 99)),
+    across(ends_with('years_old'), ~replace_na(.x,99)),
+    across(ends_with('last_race'), ~replace_na(.x,-9999)),
     across(contains('PC1'), ~replace_na(.x, -99)),
     across(contains('PC2'), ~replace_na(.x, -99)),
     across(contains('PC3'), ~replace_na(.x, -99))
