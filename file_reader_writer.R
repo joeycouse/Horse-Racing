@@ -526,66 +526,37 @@ pca_features %>%
 
 final_features<-pca_features %>%
   group_by(rc_track, rc_race, rc_date) %>%
-  mutate(across(ends_with('_resid'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_length_behind'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('races_run'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('days_since_last_races'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_lt'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_best'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_jt'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_dist'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_py'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_cy'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_trk'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(across(ends_with('_surface'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  mutate(weight = weight - mean(weight)) %>%
-  mutate(years_old = years_old - mean(years_old))
-  
-  
-  
-  
-  # Think about this one
-  mutate(across(ends_with('_purse'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.)))) %>%
-  
-  
-
-
-
-final_features<-pca_features %>%
-  group_by(rc_track, rc_race, rc_date) %>%
-  mutate(weight = weight - mean(weight),
-         median_purse = median_purse - mean(median_purse),
-         years_old = years_old - mean(years_old),
-         days_since_last_race = days_since_last_race - mean(days_since_last_race),
-         median_std_resid = median_std_resid - mean(median_std_resid),
-         races_run = races_run - mean(races_run),
-         median_length_behind = median_length_behind - mean(median_length_behind),
-         PC1_lt = PC1_lt - mean(PC1_lt),
-         PC2_lt = PC2_lt - mean(PC2_lt),
-         PC1_best = PC1_best -mean(PC1_best),
-         PC2_best = PC2_best - mean(PC2_best),
-         PC1_jt = PC1_jt - mean(PC1_jt),
-         PC2_jt = PC2_jt - mean(PC2_jt),
-         PC3_jt = PC3_jt - mean(PC3_jt),
-         PC1_dist = PC1_dist - mean(PC1_dist),
-         PC2_dist = PC2_dist - mean(PC2_dist),
-         PC1_surface = PC1_surface - mean(PC1_surface),
-         PC2_surface = PC2_surface - mean(PC2_surface),
-         PC1_cy = PC1_cy - mean(PC1_cy),
-         PC2_cy = PC2_cy - mean(PC2_cy),
-         PC1_py = PC1_py - mean(PC1_py),
-         PC2_py = PC2_py - mean(PC2_py),
-         PC1_trk = PC1_trk - mean(PC1_trk),
-         PC2_trk = PC2_trk - mean(PC2_trk)
-  ) %>%
+  mutate(across(ends_with('_resid'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_length_behind'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('races_run'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('days_since_last_races'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_lt'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_best'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_jt'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_dist'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_py'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_cy'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_trk'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_surface'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(weight = weight - mean(weight), .keep = 'unused') %>%
+  mutate(years_old = years_old - mean(years_old), .keep = 'unused') %>%
   ungroup() %>%
+  mutate(purse_1 = purse/1000 - median_purse,
+         purse_2 = purse/1000 - max_purse,
+         purse_3 = purse/1000 - min_purse,
+         purse_4 = purse/1000 - recent_purse, .keep = 'unused') %>%
   mutate(lasix = if_else(is.na(lasix), 'None', lasix),
          win = as_factor(win),
          money_win = as_factor(money_win)) %>%
+  mutate(track_condition = if_else(track_condition == 'Good' |
+                                     track_condition == 'Fast'|
+                                     track_condition == 'Firm', 'Fast', 'Bad')) %>%
+  mutate(track_condition = as_factor(track_condition)) %>%
   relocate(win, .after  = everything()) %>%
   relocate(money_win, .after = everything()) %>%
-  relocate(horse_name, .after = 'rc_race') %%>
-  mutate(win = fct_relev)
+  relocate(horse_name, .after = 'rc_race') %>%
+  mutate(win = fct_relevel(win, '1'),
+         money_win = fct_relevel(money_win, '1'))
 
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
