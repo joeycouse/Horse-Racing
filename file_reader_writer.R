@@ -552,11 +552,12 @@ final_features<-pca_features %>%
                                      track_condition == 'Fast'|
                                      track_condition == 'Firm', 'Fast', 'Bad')) %>%
   mutate(track_condition = as_factor(track_condition)) %>%
+  mutate(odds_movement = replace_na(odds_movement, 0)) %>%
   relocate(win, .after  = everything()) %>%
   relocate(money_win, .after = everything()) %>%
   relocate(horse_name, .after = 'rc_race') %>%
   mutate(win = fct_relevel(win, '1'),
-         money_win = fct_relevel(money_win, '1'))
+         money_win = fct_relevel(money_win, '1')) 
 
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 

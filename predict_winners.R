@@ -4,17 +4,11 @@ library(tidymodels)
 library(themis)
 library(vip)
 
-df <- read_feather('~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')%>%
-  mutate(track_condition = if_else(track_condition == 'Good' |
-                                     track_condition == 'Fast'|
-                                     track_condition == 'Firm', 'Fast', 'Bad')) %>%
-  mutate(track_condition = as_factor(track_condition)) %>%
-  # Try this Prediction Later
-  select(-money_win, -bute) %>%
-  mutate(lasix = if_else(is.na(lasix), 'None', lasix),
-         win = as_factor(win)) %>%
-  mutate(odds_movement = replace_na(odds_movement, 0))
+raw <- read_feather('~/Data Science/Horse Racing/Horse Racing - R/final_df.feather') 
 
+df<- raw %>%
+  select(-money_win, -bute) %>%
+  mutate(odds_movement = replace_na(odds_movement, 0))
 
 #######################  Baseline Accuracy to Beat:
 total_races<-df %>%
@@ -27,7 +21,7 @@ df %>%
 df %>%
   summarise(baseline = sum(win==0)/n())
 
-########## Data Procressing:
+########## Data Preprocessing:
 
 # Experiment with oversampling vs. Class Weights
 
@@ -97,8 +91,6 @@ xgb_results %>%
 
 
 ###################
-
-levels(df$win)
 
 rf_model <-
   rand_forest(trees = 1000) %>%
