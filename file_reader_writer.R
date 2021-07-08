@@ -12,6 +12,7 @@ horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch
 betting_file_paths <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.pgh')
 special_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.cs')
 
+
 read_chart_files <- function(file_paths, return_races=FALSE, return_starters = TRUE){
   
   all_races = data.frame()
@@ -46,10 +47,10 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
              track_condition = as.factor(track_condition)) %>%
       select(-starts_with('X')) %>%
       type_convert() %>%  
-      select(rc_track, rc_date, rc_race, race_type, num_horses, purse, distance, distance_unit, surface, track_condition) %>%
+      select(country, rc_track, rc_date, rc_race, race_type, num_horses, purse, distance, distance_unit, surface, track_condition) %>%
       mutate(distance_unit = if_else(is.na(distance_unit) | distance_unit == 'M' | distance_unit == 'F', 'F', 'Y'),
              distance = round(distance/100,2)) %>%
-      mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 2), distance)) %>%
+      mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 1), distance)) %>%
       select(-distance_unit, -race_type)
     
     all_races <- bind_rows(all_races, races)
@@ -92,7 +93,6 @@ read_running_lines <- function(file_paths){
                    col_types = 'ccicccccdcccdccddccccddddddddcccddddddfccdddddddddddddccddddccddffffffcccddccccdddddddfddddddddddddd')) %>%
     clean_names() %>%
     as_tibble() %>%
-    distinct(track, date, horse, final_time, .keep_all = TRUE) %>%
     mutate(rc_date = mdy(rc_date),
            date = mdy(date),
            track = str_to_upper(track)) %>%
@@ -190,11 +190,34 @@ return(betting_files)
   
 }
 
+recent_stat<- function(metric, bigger_better = TRUE){
+  
+  
+  if (length(metric) < 3) {
+    result = mean(metric)
+    return(result)
+  }
+  
+  else {
+    
+    if(bigger_better == FALSE){
+      result = (sum(metric[1:3]) - max(metric[1:3]))/2
+      return(result)
+    }
+    
+    result = (sum(metric[1:3]) - min(metric[1:3]))/2
+    return(result)
+    
+  }
+  
+}
+
 running_lines <- read_running_lines(running_line_files)
 races <- read_chart_files(chart_files, return_races = T, return_starters = F)
 starters <- read_chart_files(chart_files, return_races = F, return_starters = T)
 horses <- read_horse_files(horse_files)
 betting <- read_betting_files(betting_file_paths)
+foreign_codes <- read_csv('~/Data Science/Horse Racing/Horse Racing Code/data/foreign_track_codes.csv')
 special <- map_df(special_files, ~read_csv(., trim_ws = TRUE, 
                                            col_types = 'ccdccddddddddccc')) %>%
   clean_names() %>%
@@ -204,15 +227,14 @@ special <- map_df(special_files, ~read_csv(., trim_ws = TRUE,
   select(rc_track, rc_date, rc_race, horse_name ,starts_with('best')) %>%
   select(-best_track_surface)
 
-
 ###############################
 
 # Returning dataframes and filtering to contain matches from both datasets
 starters <- starters %>%
-  filter(post_position < 99, odds != 0)
+  filter(post_position < 99, odds != 0, country == "USA")
 
 races <- races %>%
-  filter(num_horses <= 12) 
+  filter(num_horses <= 12, country == 'USA') 
 
 races <- races %>%
   semi_join(starters, by = c('rc_track', 'rc_date', 'rc_race')) 
@@ -220,93 +242,170 @@ races <- races %>%
 starters <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
 
+running_lines <- running_lines %>%
+  filter(!(track %in% foreign_codes$Code))
+
 # Dependent variable generation and additional column generation
 
 # Figure out if the bute column of horses is reading in correctly
 
-features <- starters %>%
+starter_features <- starters %>%
   inner_join(races) %>%
   filter(non_betting_starter == 'N') %>%
   select(rc_track, rc_date, rc_race, num_horses, purse, distance, surface, track_condition,
-         horse_name,post_position, favorite, odds, finish_position) %>%
+         horse_name,post_position, favorite, odds, finish_position, trainer_last_name, owner_last_name) %>%
   mutate(favorite = if_else(favorite == 'Y', 1, 0),
          win = if_else(finish_position ==1, 1, 0),
          money_win = if_else(finish_position <= 3, 1,0),
          horse_name = str_trim(horse_name),
-         odds = 100/(odds+100)
+         payout = odds/100,
+         odds = 100/(odds+100),
          ) %>%
   select(-finish_position) %>%
+  rowwise() %>%
+  mutate(owner_trainer_same = as.numeric(str_detect(owner_last_name, trainer_last_name)), .keep = 'unused') %>%
+  ungroup() %>%
   group_by(rc_track, rc_date, rc_race) %>%
   mutate(odds = round(odds/sum(odds), 3)) %>%
   ungroup()
-  
+
 # Fitting cubic spline for distance vs speed function
 
-spline_features <- running_lines %>%
-  select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj, final_time) %>%
+spline_features <- races %>%
+  select(rc_track, rc_date, rc_race, distance) %>%
+  left_join(running_lines, by = c('rc_track', 'rc_date', 'rc_race')) %>%
+  filter(beyer < 998, beyer > 0, 
+         distance.x <= 9, distance.x >= 4,
+         distance.y <= 9, distance.y >= 4) %>%
+  select(rc_track, rc_date, rc_race, track, date, horse, 
+         distance.x, distance.y, speed, purse, final_call, final_call_len_adj, final_time, beyer) %>%
   mutate(horse = str_trim(horse)) %>%
   rename(horse_name = horse) %>%
   nest(data = everything()) %>%
-  mutate(model = map(data, ~lm(speed ~ mSpline(distance,knots = c(2,5,8,11.5), degree = 3), data = .))) %>%
+  mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
   unnest(cols = c(final)) %>%
   mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj)) %>%
   group_by(rc_track, rc_date, rc_race, horse_name) %>%
-  arrange(date) %>%
-  # Add Additional Features here (most recent std-resid, max std-resid, min-std-resid)
   summarise(median_std_resid  = round(median(.std.resid),3),
             max_std_resid = round(max(.std.resid),3),
             min_std_resid = round(min(.std.resid),3),
-            recent_std_resid  = last(.std.resid, date),
+            recent_std_resid  = recent_stat(.std.resid),
             median_purse = median(purse),
             max_purse = max(purse),
             min_purse = min(purse),
-            recent_purse = last(purse, date),
+            recent_purse = recent_stat(purse),
             median_length_behind  = median(final_call_len_adj[final_call_len_adj < 99.99]),
             max_length_behind = max(final_call_len_adj[final_call_len_adj < 99.99]),
             min_length_behind = min(final_call_len_adj[final_call_len_adj < 99.99]),
-            recent_length_behind = last(final_call_len_adj, date),
-            races_run = n(),
-            no_finish = sum(final_call_len_adj >= 99.99),
-            ) %>%
-  mutate(median_length_behind = replace_na(median_length_behind, 99.99),
-         max_length_behind = if_else(max_length_behind == -Inf, 99.99, max_length_behind),
-         min_length_behind = if_else(min_length_behind == Inf, 99.99, min_length_behind))
-  
+            recent_length_behind = recent_stat(final_call_len_adj, bigger_better = FALSE),
+            median_beyer = round(median(beyer)),
+            max_beyer = max(beyer),
+            min_beyer = min(beyer),
+            recent_beyer = recent_stat(beyer),
+            improving = if_else(recent_beyer > beyer[2], 1,0),
+            improving = replace_na(improving, 0),
+            dist_beyer = mean(beyer[abs(distance.x - distance.y) <= 0.5]),
+            dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 1])),
+            dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 2])),
+            dist_beyer = replace_na(mean(beyer)),
+            dist_length_behind = mean(final_call_len_adj[abs(distance.x - distance.y) <= 0.5]),
+            dist_length_behind = replace_na(mean(final_call_len_adj[abs(distance.x - distance.y) <= 1])),
+            dist_length_behind = replace_na(mean(final_call_len_adj[abs(distance.x - distance.y) <= 2])),
+            dist_length_behind = replace_na(mean(final_call_len_adj)),
+            dist_std_resid = mean(.std.resid[abs(distance.x - distance.y) <= 0.5]),
+            dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 1])),
+            dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 2])),
+            dist_std_resid = replace_na(mean(.std.resid)),
+            races_run = n()
+  )
+
+############ Uncomment to run
+
+# Beyer Speed Figures
+
+# Slightly skewed normalish distrobution
+
+# spline_features %>%
+#   select(beyer) %>%
+#   ggplot() +
+#   aes(x = beyer) +
+#   geom_histogram(bins = 30, fill = 'blue')
 
 
 # Spline fit plot
-running_lines %>%
-  select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj, final_time) %>%
-  mutate(horse = str_trim(horse)) %>%
-  rename(horse_name = horse) %>%
-  nest(data = everything()) %>%
-  mutate(model = map(data, ~lm(speed ~ mSpline(distance,knots = c(2,5,8,11.5), degree = 3), data = .))) %>%
-  mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
-  unnest(cols = c(final)) %>%
-  sample_frac(0.25) %>%
-  ggplot() +
-  aes(x = distance, y = speed) +
-  geom_jitter()+
-  geom_line(aes(x = distance,  y = .fitted), size = 1.5, color = 'red')
+
+#running_lines %>%
+#   filter(beyer < 998, beyer > 0, distance <= 9, distance >= 4) %>%
+#   select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj, final_time, beyer) %>%
+#   mutate(horse = str_trim(horse)) %>%
+#   rename(horse_name = horse) %>%
+#   nest(data = everything()) %>%
+#   mutate(model = map(data, ~lm(speed ~ mSpline(distance, degree = 3), data = .))) %>%
+#   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
+#   unnest(cols = c(final)) %>%
+#   sample_frac(0.10) %>%
+#   ggplot() +
+#   aes(x = distance, y = speed) +
+#   geom_jitter()+
+#   geom_line(aes(x = distance,  y = .fitted), size = 1.5, color = 'red')
+
 
 # Resid vs Fitted Plot
-running_lines %>%
-  select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj, final_time) %>%
-  mutate(horse = str_trim(horse)) %>%
-  rename(horse_name = horse) %>%
-  nest(data = everything()) %>%
-  mutate(model = map(data, ~lm(speed ~ mSpline(distance,knots = c(2,5,8,11.5), degree = 3), data = .))) %>%
-  mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
-  unnest(cols = c(final)) %>%
-  sample_frac(0.15) %>%
-  ggplot()+
-  aes(x = .fitted, y = .resid) +
-  geom_jitter() +
-  geom_smooth(method = 'lm', formula = y~x)
 
+# running_lines %>%
+#   filter(beyer < 998, beyer > 0, distance <= 9, distance >= 4) %>%
+#   select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj,
+# final_time) %>%
+#   mutate(horse = str_trim(horse)) %>%
+#   rename(horse_name = horse) %>%
+#   nest(data = everything()) %>%
+#   mutate(model = map(data, ~lm(speed ~ mSpline(distance,knots = c(6,7), degree = 3), data = .))) %>%
+#   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
+#   unnest(cols = c(final)) %>%
+#   sample_frac(0.15) %>%
+#   ggplot()+
+#   aes(x = .fitted, y = .resid) +
+#   geom_jitter() +
+#   geom_smooth(method = 'lm', formula = y~x)
 
-all_features<-features %>%
+# Resid Histogram
+
+# running_lines %>%
+#   filter(beyer < 998, beyer > 0, distance <= 9, distance >= 4) %>%
+#   select(rc_track, rc_date, rc_race, track, date, horse, distance, speed, purse, final_call, final_call_len_adj,
+# final_time) %>%
+#   mutate(horse = str_trim(horse)) %>%
+#   rename(horse_name = horse) %>%
+#   nest(data = everything()) %>%
+#   mutate(model = map(data, ~lm(speed ~ mSpline(distance,knots = c(6,7), degree = 3), data = .))) %>%
+#   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
+#   unnest(cols = c(final)) %>%
+#   sample_frac(0.15) %>%
+#   ggplot()+
+#   aes(x = .std.resid) +
+#   geom_histogram()
+
+# races %>%
+#   select(rc_track, rc_date, rc_race, distance) %>%
+#   left_join(running_lines, by = c('rc_track', 'rc_date', 'rc_race')) %>%
+#   filter(beyer < 998, beyer > 0, 
+#          distance.x <= 9, distance.x >= 4,
+#          distance.y <= 9, distance.y >= 4) %>%
+#   select(rc_track, rc_date, rc_race, track, date, horse, distance.x, distance.y, speed, purse, final_call, final_call_len_adj, final_time, beyer) %>%
+#   mutate(horse = str_trim(horse)) %>%
+#   rename(horse_name = horse) %>%
+#   nest(data = everything()) %>%
+#   mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
+#   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
+#   unnest(cols = c(final)) %>%
+#   ggplot() %>%
+#   aes(x = .std.resid) %>%
+#   geom_histogram()
+
+##########
+
+all_features <- starter_features %>%
   left_join(spline_features) %>%
   group_by(rc_track, rc_date, rc_race) %>%
   filter(sum(is.na(races_run)) <= 0)%>%
@@ -315,10 +414,17 @@ all_features<-features %>%
   select(-ml_odds) %>%
   left_join(special) %>%
   left_join(horses) %>%
-  mutate(lasix = ifelse(lasix == 'l' | lasix == 'L', 'L', NA)) %>%
-  ungroup()
+  mutate(lasix = ifelse(lasix == 'l' | lasix == 'L', 'L', NA),
+         average_earnings = lt_earnings/races_run) %>%
+  ungroup() %>%
+  select(-ends_with('pct'), -starts_with('w_'), -best_wet) %>%
+  mutate(surface_earnings = if_else(surface == 'D', d_earnings, t_earnings),
+         surface_money = if_else(surface == 'D', d_money, t_money),
+         best_surface = if_else(surface == 'D', best_fast_dirt, best_turf),
+         .keep = 'unused')
 
-correlation<-all_features %>%
+
+correlation <- all_features %>%
   select_if(is.numeric) %>%
   select(-odds_movement, -rc_race, -distance, -post_position, -purse) %>%
   cor() %>%
@@ -496,24 +602,27 @@ loadings_d<-pc_d$x %>%
  
 ################
 
-pca_features<-all_features %>%
-  select(-starts_with('cy_'),
-         -starts_with('py_'),
-         -starts_with('lt_'),
-         -starts_with('jt_'),
-         -starts_with('d_'),
-         -starts_with('best_'),
-         -starts_with('dist_'),
-         -starts_with('t_'),
-         -starts_with('w_'),
-         -starts_with('trk_')) %>%
-  bind_cols(c(loadings_lt, loadings_best, loadings_jt, loadings_dist, loadings_d, loadings_t, loadings_cy, loadings_py, loadings_trk)) %>%
-  mutate(PC1_surface = if_else(surface == 'D', PC1_d, PC1_t),
-         PC2_surface = if_else(surface == 'D', PC2_d, PC2_t)) %>%
-  select(-PC1_d, -PC2_d, -PC1_t, -PC2_t)
 
-rm(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk, loadings_d)
-rm(pc_best, pc_cy, pc_dist, pc_jt, pc_lt, pc_py, pc_t, pc_trk, pc_w, pc_d)
+# Questioning about how much value this is adding....
+
+# pca_features<-all_features %>%
+#   select(-starts_with('cy_'),
+#          -starts_with('py_'),
+#          -starts_with('lt_'),
+#          -starts_with('jt_'),
+#          -starts_with('d_'),
+#          -starts_with('best_'),
+#          -starts_with('dist_'),
+#          -starts_with('t_'),
+#          -starts_with('w_'),
+#          -starts_with('trk_')) %>%
+#   bind_cols(c(loadings_lt, loadings_best, loadings_jt, loadings_dist, loadings_d, loadings_t, loadings_cy, loadings_py, loadings_trk)) %>%
+#   mutate(PC1_surface = if_else(surface == 'D', PC1_d, PC1_t),
+#          PC2_surface = if_else(surface == 'D', PC2_d, PC2_t)) %>%
+#   select(-PC1_d, -PC2_d, -PC1_t, -PC2_t)
+# 
+# rm(loadings_cy, loadings_py, loadings_lt,loadings_jt, loadings_best, loadings_dist, loadings_t, loadings_w, loadings_trk, loadings_d)
+# rm(pc_best, pc_cy, pc_dist, pc_jt, pc_lt, pc_py, pc_t, pc_trk, pc_w, pc_d)
 
 
 # 2007 races
@@ -524,27 +633,29 @@ pca_features %>%
 
 # Build Final Dataset
 
-final_features<-pca_features %>%
+# To Do
+# Make sure all horses are represented in the race, and filter out races when all horse aren't present
+
+final_features <- all_features %>%
   group_by(rc_track, rc_race, rc_date) %>%
   mutate(across(ends_with('_resid'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(across(ends_with('_length_behind'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(across(ends_with('races_run'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(across(ends_with('days_since_last_races'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_lt'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_best'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_jt'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_dist'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_py'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_cy'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_trk'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_surface'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_beyer'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(starts_with('best_'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(purse_1 = purse - median_purse,
+         purse_2 = purse - max_purse,
+         purse_3 = purse - min_purse,
+         purse_4 = purse - recent_purse, .keep = 'unused') %>%
+  mutate(across(ends_with('_money'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_earnings'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(weight = weight - mean(weight), .keep = 'unused') %>%
   mutate(years_old = years_old - mean(years_old), .keep = 'unused') %>%
+  mutate(days_since_last_race = days_since_last_race - mean(days_since_last_race), .keep = 'unused') %>%
+  mutate(jt_all_starts = jt_all_starts - mean(jt_all_starts), .keep = 'unused') %>%
+  mutate(jt_track_starts = jt_track_starts - mean(jt_track_starts), .keep = 'unused') %>%
   ungroup() %>%
-  mutate(purse_1 = purse/1000 - median_purse,
-         purse_2 = purse/1000 - max_purse,
-         purse_3 = purse/1000 - min_purse,
-         purse_4 = purse/1000 - recent_purse, .keep = 'unused') %>%
   mutate(lasix = if_else(is.na(lasix), 'None', lasix),
          win = as_factor(win),
          money_win = as_factor(money_win)) %>%
@@ -559,6 +670,9 @@ final_features<-pca_features %>%
   mutate(win = fct_relevel(win, '1'),
          money_win = fct_relevel(money_win, '1')) 
 
+
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
-write_feather(final_features, '~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
+date <- as.character(today())
+file_name <- glue('~/Data Science/Horse Racing/Horse Racing - R/final_df{date}.feather')
+write_feather(final_features, file_name)
