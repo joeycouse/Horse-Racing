@@ -65,7 +65,7 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
         record_type = X1, rc_race = X2, horse_key = X3, horse_name = X4, birthday = X5, breed = X7, sex = X8,
         medication = X24, equipment = X25, jock_last_name = X27, jock_first_name = X28, trainer_last_name = X31, 
         trainer_first_name = X32, owner_last_name = X34, owner_first_name = X35, odds = X37, non_betting_starter = X38,
-        favorite = X41, post_position = X42, finish_position = X51) %>%
+        favorite = X41, post_position = X42, finish_position = X51, final_len = X63) %>%
       select(-starts_with('X')) %>%
       mutate(birthday = as.Date(as.character(birthday), format = '%Y%m%d'),
              breed = as.factor(breed),
@@ -88,6 +88,7 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
 }
 
 read_running_lines <- function(file_paths){
+
   
   running_lines <- map_df(file_paths, ~read_csv(., trim_ws = TRUE, 
                    col_types = 'ccicccccdcccdccddccccddddddddcccddddddfccdddddddddddddccddddccddffffffcccddccccdddddddfddddddddddddd')) %>%
@@ -112,6 +113,7 @@ read_running_lines <- function(file_paths){
 }
 
 read_horse_files <- function(file_paths){
+  
   
     horse_files <- map_df(file_paths, ~read_csv(., trim_ws = TRUE, 
                    col_types = 'ccifdcfcfddcccccccccddcfffddccdddddddddddddddddddddddddddddddddddddddddcdddddddddddddddddddddddddddddddddccdcdfcdddddd')) %>%
@@ -253,15 +255,18 @@ starter_features <- starters %>%
   inner_join(races) %>%
   filter(non_betting_starter == 'N') %>%
   select(rc_track, rc_date, rc_race, num_horses, purse, distance, surface, track_condition,
-         horse_name,post_position, favorite, odds, finish_position, trainer_last_name, owner_last_name) %>%
-  mutate(favorite = if_else(favorite == 'Y', 1, 0),
-         win = if_else(finish_position ==1, 1, 0),
-         money_win = if_else(finish_position <= 3, 1,0),
+         horse_name,post_position, favorite, odds, finish_position, trainer_last_name, owner_last_name, final_len) %>%
+  group_by(rc_track, rc_date, rc_race) %>%
+  mutate(final_len = if_else(post_position == 99, Inf, final_len),
+         finish_order = min_rank(final_len),
+         favorite = if_else(favorite == 'Y', 1, 0),
+         win = if_else(finish_order == 1 | final_len <= 10, 1, 0),
+         money_win = if_else(finish_order <= 3, 1,0),
          horse_name = str_trim(horse_name),
          payout = odds/100,
          odds = 100/(odds+100),
          ) %>%
-  select(-finish_position) %>%
+  select(-finish_position, - finish_order) %>%
   rowwise() %>%
   mutate(owner_trainer_same = as.numeric(str_detect(owner_last_name, trainer_last_name)), .keep = 'unused') %>%
   ungroup() %>%
@@ -438,166 +443,166 @@ correlation <- all_features %>%
 
 # PCA Dimension Reduction
 ###############
-
-#Just the t_variables
-pc_t<-prcomp(all_features %>%
-         select(starts_with('t_')),
-       center = T,
-       scale. = T
-       )
-# Two PC explain 90% + variance, only using two
-summary(pc_t)
-
-loadings_t<-pc_t$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_t = PC1,
-         PC2_t = PC2)
-
-#Just the dist_variables
-pc_dist<-prcomp(all_features %>%
-               select(starts_with('dist_')),
-             center = T,
-             scale. = T
-)
-# Two PC explain 89% + variance, only using two
-summary(pc_dist)
-
-loadings_dist<-pc_dist$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_dist = PC1,
-         PC2_dist = PC2)
-
-#Just the lt_variables
-pc_lt<-prcomp(all_features %>%
-                  select(starts_with('lt_')),
-                center = T,
-                scale. = T
-)
-
-# Two PC explain 85% + variance, only using two
-summary(pc_lt)
-
-loadings_lt<-pc_lt$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_lt = PC1,
-         PC2_lt = PC2)
-
-#Just the w_variables
-pc_w<-prcomp(all_features %>%
-                select(starts_with('w_')),
-              center = T,
-              scale. = T
-)
-
-# Two PC explain 90% + variance, only using two
-summary(pc_w)
-
-loadings_w<-pc_w$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_w = PC1,
-         PC2_w = PC2)
-
-#Just the cy_variables
-pc_cy<-prcomp(all_features %>%
-               select(starts_with('cy_')),
-             center = T,
-             scale. = T
-)
-
-# Two PC explain 89% + variance, only using two
-summary(pc_cy)
-
-loadings_cy<-pc_cy$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_cy = PC1,
-         PC2_cy = PC2)
-
-#Just the py_variables
-pc_py<-prcomp(all_features %>%
-                select(starts_with('py_')),
-              center = T,
-              scale. = T
-)
-
-# Two PC explain 90% + variance, only using two
-summary(pc_py)
-
-loadings_py<-pc_py$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_py = PC1,
-         PC2_py = PC2)
-
-#Just the trk_variables
-pc_trk<-prcomp(all_features %>%
-                select(starts_with('trk_')),
-              center = T,
-              scale. = T
-)
-
-# Two PC explain 88% + variance, only using two
-summary(pc_trk)
-
-loadings_trk<-pc_trk$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_trk = PC1,
-         PC2_trk = PC2)
-
-#Just the best_variables
-pc_best<-prcomp(all_features %>%
-                 select(starts_with('best_')),
-               center = T,
-               scale. = T
-)
-
-# One PC explain 87% + variance, only using two
-summary(pc_best)
-
-loadings_best<-pc_best$x %>%
-  as_tibble() %>%
-  select(PC1, PC2, PC3) %>%
-  rename(PC1_best = PC1,
-         PC2_best = PC2,
-         PC3_best = PC3)
-
-#Just the jt_variables
-pc_jt<-prcomp(all_features %>%
-                 select(starts_with('jt_')),
-               center = T,
-               scale. = T
-)
-
-# Three PC explain 8% + variance, only using two
-summary(pc_jt)
-
-loadings_jt<-pc_jt$x %>%
-  as_tibble() %>%
-  select(PC1, PC2, PC3) %>%
-  rename(PC1_jt = PC1,
-         PC2_jt = PC2,
-         PC3_jt = PC3)
-
-#Just the d_variables
-pc_d<-prcomp(all_features %>%
-                select(starts_with('d_')),
-              center = T,
-              scale. = T
-)
-
-# Two PC explain 85% + variance, only using two
-summary(pc_d)
-
-loadings_d<-pc_d$x %>%
-  as_tibble() %>%
-  select(PC1, PC2) %>%
-  rename(PC1_d = PC1,
-         PC2_d = PC2)
+# 
+# #Just the t_variables
+# pc_t<-prcomp(all_features %>%
+#          select(starts_with('t_')),
+#        center = T,
+#        scale. = T
+#        )
+# # Two PC explain 90% + variance, only using two
+# summary(pc_t)
+# 
+# loadings_t<-pc_t$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_t = PC1,
+#          PC2_t = PC2)
+# 
+# #Just the dist_variables
+# pc_dist<-prcomp(all_features %>%
+#                select(starts_with('dist_')),
+#              center = T,
+#              scale. = T
+# )
+# # Two PC explain 89% + variance, only using two
+# summary(pc_dist)
+# 
+# loadings_dist<-pc_dist$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_dist = PC1,
+#          PC2_dist = PC2)
+# 
+# #Just the lt_variables
+# pc_lt<-prcomp(all_features %>%
+#                   select(starts_with('lt_')),
+#                 center = T,
+#                 scale. = T
+# )
+# 
+# # Two PC explain 85% + variance, only using two
+# summary(pc_lt)
+# 
+# loadings_lt<-pc_lt$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_lt = PC1,
+#          PC2_lt = PC2)
+# 
+# #Just the w_variables
+# pc_w<-prcomp(all_features %>%
+#                 select(starts_with('w_')),
+#               center = T,
+#               scale. = T
+# )
+# 
+# # Two PC explain 90% + variance, only using two
+# summary(pc_w)
+# 
+# loadings_w<-pc_w$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_w = PC1,
+#          PC2_w = PC2)
+# 
+# #Just the cy_variables
+# pc_cy<-prcomp(all_features %>%
+#                select(starts_with('cy_')),
+#              center = T,
+#              scale. = T
+# )
+# 
+# # Two PC explain 89% + variance, only using two
+# summary(pc_cy)
+# 
+# loadings_cy<-pc_cy$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_cy = PC1,
+#          PC2_cy = PC2)
+# 
+# #Just the py_variables
+# pc_py<-prcomp(all_features %>%
+#                 select(starts_with('py_')),
+#               center = T,
+#               scale. = T
+# )
+# 
+# # Two PC explain 90% + variance, only using two
+# summary(pc_py)
+# 
+# loadings_py<-pc_py$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_py = PC1,
+#          PC2_py = PC2)
+# 
+# #Just the trk_variables
+# pc_trk<-prcomp(all_features %>%
+#                 select(starts_with('trk_')),
+#               center = T,
+#               scale. = T
+# )
+# 
+# # Two PC explain 88% + variance, only using two
+# summary(pc_trk)
+# 
+# loadings_trk<-pc_trk$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_trk = PC1,
+#          PC2_trk = PC2)
+# 
+# #Just the best_variables
+# pc_best<-prcomp(all_features %>%
+#                  select(starts_with('best_')),
+#                center = T,
+#                scale. = T
+# )
+# 
+# # One PC explain 87% + variance, only using two
+# summary(pc_best)
+# 
+# loadings_best<-pc_best$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2, PC3) %>%
+#   rename(PC1_best = PC1,
+#          PC2_best = PC2,
+#          PC3_best = PC3)
+# 
+# #Just the jt_variables
+# pc_jt<-prcomp(all_features %>%
+#                  select(starts_with('jt_')),
+#                center = T,
+#                scale. = T
+# )
+# 
+# # Three PC explain 8% + variance, only using two
+# summary(pc_jt)
+# 
+# loadings_jt<-pc_jt$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2, PC3) %>%
+#   rename(PC1_jt = PC1,
+#          PC2_jt = PC2,
+#          PC3_jt = PC3)
+# 
+# #Just the d_variables
+# pc_d<-prcomp(all_features %>%
+#                 select(starts_with('d_')),
+#               center = T,
+#               scale. = T
+# )
+# 
+# # Two PC explain 85% + variance, only using two
+# summary(pc_d)
+# 
+# loadings_d<-pc_d$x %>%
+#   as_tibble() %>%
+#   select(PC1, PC2) %>%
+#   rename(PC1_d = PC1,
+#          PC2_d = PC2)
 
  
 ################
@@ -626,10 +631,10 @@ loadings_d<-pc_d$x %>%
 
 
 # 2007 races
-pca_features %>%
-  group_by(rc_track, rc_date, rc_race) %>%
-  count() %>%
-  nrow()
+# pca_features %>%
+#   group_by(rc_track, rc_date, rc_race) %>%
+#   count() %>%
+#   nrow()
 
 # Build Final Dataset
 
@@ -674,5 +679,5 @@ final_features <- all_features %>%
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
 
 date <- as.character(today())
-file_name <- glue('~/Data Science/Horse Racing/Horse Racing - R/final_df{date}.feather')
+file_name <- glue('~/Data Science/Horse Racing/Horse Racing - R/Horse Racing R/data/final_df{date}.feather')
 write_feather(final_features, file_name)

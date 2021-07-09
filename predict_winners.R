@@ -28,15 +28,35 @@ money_wins <-
 
 model_df <-
   df %>%
-  select(-money_win, -bute, -payout) %>%
+  select(-money_win, -bute, -payout, -favorite) %>%
   filter(!is.na(days_since_last_race)) %>%
-  mutate(win = fct_relevel(win, '1'))
+  mutate(win = fct_relevel(win, '1'),
+         median_std_resid_3 = sqrt(median_std_resid_3),
+         across(ends_with('_3'), ~sqrt(.x))) 
 
-glimpse(model_df)
+model_df %>%
+  ggplot(aes(x = median_std_resid_3)) +
+  geom_histogram()
+
+
+model_df %>%
+  select(ends_with('_3')) %>%
+  filter(if_any(everything(),~is.na(.x))) %>%
+  glimpse()
+
+
+df %>%
+  ggplot(aes(x = purse_3)) +
+  geom_histogram()
+
+df %>%
+  filter(purse_3 < 0) %>%
+  glimpse()
 
 # To do
 # investigate distribution of variables with box plots / histograms
 # add addtional model types: logistic regression, neural networks, SVM?
+
 
 
 #######################  Baseline Accuracy to Beat:
