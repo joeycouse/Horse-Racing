@@ -266,7 +266,7 @@ starter_features <- starters %>%
          payout = odds/100,
          odds = 100/(odds+100),
          ) %>%
-  select(-finish_position, - finish_order) %>%
+  select(-finish_position, - finish_order, - final_len) %>%
   rowwise() %>%
   mutate(owner_trainer_same = as.numeric(str_detect(owner_last_name, trainer_last_name)), .keep = 'unused') %>%
   ungroup() %>%
@@ -276,6 +276,11 @@ starter_features <- starters %>%
 
 # Fitting cubic spline for distance vs speed function
 
+# To do 
+# add beaten favorite
+# races since last win
+# races since last money win
+
 spline_features <- races %>%
   select(rc_track, rc_date, rc_race, distance) %>%
   left_join(running_lines, by = c('rc_track', 'rc_date', 'rc_race')) %>%
@@ -283,14 +288,17 @@ spline_features <- races %>%
          distance.x <= 9, distance.x >= 4,
          distance.y <= 9, distance.y >= 4) %>%
   select(rc_track, rc_date, rc_race, track, date, horse, 
-         distance.x, distance.y, speed, purse, final_call, final_call_len_adj, final_time, beyer) %>%
+         distance.x, distance.y, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
   mutate(horse = str_trim(horse)) %>%
   rename(horse_name = horse) %>%
   nest(data = everything()) %>%
   mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
   unnest(cols = c(final)) %>%
-  mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj)) %>%
+  mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
+         beaten_favorite = if_else(odds_position == 1 & final_call_len_adj > 0.1, 'Y', 'N'),
+         outperform = if_else(final_call < odds_position, 'Y', 'N'),
+         place_difference = final_call - odds_position) %>%
   group_by(rc_track, rc_date, rc_race, horse_name) %>%
   summarise(median_std_resid  = round(median(.std.resid),3),
             max_std_resid = round(max(.std.resid),3),
@@ -322,6 +330,13 @@ spline_features <- races %>%
             dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 1])),
             dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 2])),
             dist_std_resid = replace_na(mean(.std.resid)),
+            median_place_difference = median(place_difference),
+            total_place_difference = sum(place_difference),
+            total_outperforms = sum(outperform == 'Y'),
+            total_beaten_favorite = sum(beaten_favorite == 'Y'),
+            recent_beaten_favorite = last(beaten_favorite),
+            recent_outperform = last(outperform),
+            recent_place_difference = last(place_difference),
             races_run = n()
   )
 
@@ -649,10 +664,10 @@ final_features <- all_features %>%
   mutate(across(ends_with('days_since_last_races'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(across(ends_with('_beyer'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(across(starts_with('best_'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(purse_1 = purse - median_purse,
-         purse_2 = purse - max_purse,
-         purse_3 = purse - min_purse,
-         purse_4 = purse - recent_purse, .keep = 'unused') %>%
+  mutate(purse_1 = purse/1000 - median_purse,
+         purse_2 = purse/1000 - max_purse,
+         purse_3 = purse/1000 - min_purse,
+         purse_4 = purse/1000 - recent_purse, .keep = 'unused') %>%
   mutate(across(ends_with('_money'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(across(ends_with('_earnings'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
   mutate(weight = weight - mean(weight), .keep = 'unused') %>%

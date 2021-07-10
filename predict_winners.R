@@ -2,7 +2,7 @@ library(feather)
 library(tidyverse)
 library(tidymodels)
 library(themis)
-library(vip)
+library(glue)
 
 # Optional to Speed Up Training
 
@@ -15,7 +15,14 @@ library(vip)
 # To do
 # Add reading of the most recent file 
 
-df <- read_feather('~/Data Science/Horse Racing/Horse Racing - R/final_df.feather')
+feathers <- list.files('./data')
+files <- glue('./data/{feathers}')
+path <- file.info(files) %>%
+  as_tibble(rownames = 'path') %>%
+  slice_max(mtime) %>%
+  pluck(1)
+
+df <- read_feather(path)
 
 money_wins <-
   df %>%
@@ -26,32 +33,37 @@ money_wins <-
 # To Do
 # Move some of the transformations into the read_write_file
 
-model_df <-
-  df %>%
+
+df %>%
   select(-money_win, -bute, -payout, -favorite) %>%
   filter(!is.na(days_since_last_race)) %>%
-  mutate(win = fct_relevel(win, '1'),
-         median_std_resid_3 = sqrt(median_std_resid_3),
-         across(ends_with('_3'), ~sqrt(.x))) 
-
-model_df %>%
-  ggplot(aes(x = median_std_resid_3)) +
-  geom_histogram()
-
-
-model_df %>%
-  select(ends_with('_3')) %>%
-  filter(if_any(everything(),~is.na(.x))) %>%
-  glimpse()
+  select(median_std_resid_3, median_std_resid_2) %>%
+  mutate(x = sqrt(median_std_resid_3), y = -sqrt(-median_std_resid_2)) %>%
+  ggplot()+
+  aes(x = x, y = y)+
+  geom_point()
 
 
 df %>%
-  ggplot(aes(x = purse_3)) +
+  ggplot(aes(x = min_std_resid_1)) +
   geom_histogram()
 
+
+
 df %>%
-  filter(purse_3 < 0) %>%
-  glimpse()
+  ggplot(aes(x = sqrt(median_std_resid_3))) +
+  geom_histogram()
+
+
+df %>%
+  ggplot(aes(x = -sqrt(-median_std_resid_2))) +
+  geom_histogram()
+
+
+df %>%
+  ggplot(aes(x = jt_track_starts)) +
+  geom_density( fill = 'blue')
+
 
 # To do
 # investigate distribution of variables with box plots / histograms
