@@ -130,7 +130,7 @@ read_horse_files <- function(file_paths){
     mutate(d_born ='15', m_born = as.character(m_born)) %>%
     unite('birthday', c(y_born, m_born, d_born), sep = '-') %>%
     mutate(birthday = ymd(birthday), 
-           years_old = round((rc_date - birthday)/365.25, 2),
+           years_old = round(as.numeric((rc_date - birthday))/365.25, 2),
            days_since_last_race = (rc_date - last_raced)) %>%
     select(rc_track, 
            rc_date, 
@@ -231,6 +231,9 @@ special <- map_df(special_files, ~read_csv(., trim_ws = TRUE,
 
 ###############################
 
+# To do
+# Create jockey file based on the running lines file
+
 # Returning dataframes and filtering to contain matches from both datasets
 starters <- starters %>%
   filter(post_position < 99, odds != 0, country == "USA")
@@ -248,8 +251,6 @@ running_lines <- running_lines %>%
   filter(!(track %in% foreign_codes$Code))
 
 # Dependent variable generation and additional column generation
-
-# Figure out if the bute column of horses is reading in correctly
 
 starter_features <- starters %>%
   inner_join(races) %>%
@@ -277,37 +278,50 @@ starter_features <- starters %>%
 # Fitting cubic spline for distance vs speed function
 
 # To do 
-# add beaten favorite
+# Jockey out performances
+# Jockey place difference
 # races since last win
 # races since last money win
+# Average odds movement for jockey and horse
 
 spline_features <- races %>%
   select(rc_track, rc_date, rc_race, distance) %>%
   left_join(running_lines, by = c('rc_track', 'rc_date', 'rc_race')) %>%
   filter(beyer < 998, beyer > 0, 
          distance.x <= 9, distance.x >= 4,
-         distance.y <= 9, distance.y >= 4) %>%
-  select(rc_track, rc_date, rc_race, track, date, horse, 
+         distance.y <= 9, distance.y >= 4, purse >0) %>%
+  select(rc_track, rc_date, rc_race, track, date, race, horse, 
          distance.x, distance.y, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
-  mutate(horse = str_trim(horse)) %>%
+  mutate(horse = str_trim(horse),
+         log_purse = log(purse),
+         quant_purse = ecdf(log_purse)(log_purse),
+         purse_category = case_when(ecdf(log_purse)(log_purse) < 0.1 ~ 'F',
+                                    ecdf(log_purse)(log_purse) < 0.35 ~ 'D',
+                                    ecdf(log_purse)(log_purse) < 0.65 ~ 'C',
+                                    ecdf(log_purse)(log_purse) < 0.9 ~ 'B',
+                                    ecdf(log_purse)(log_purse) <= 1 ~ 'A')
+  )%>%
   rename(horse_name = horse) %>%
-  nest(data = everything()) %>%
+  nest_by(purse_category) %>%
+  group_by(purse_category) %>%
   mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
   unnest(cols = c(final)) %>%
   mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
          beaten_favorite = if_else(odds_position == 1 & final_call_len_adj > 0.1, 'Y', 'N'),
-         outperform = if_else(final_call < odds_position, 'Y', 'N'),
+         performance = case_when(final_call < odds_position ~ 'W',
+                                 final_call > odds_position ~ 'L',
+                                 final_call == odds_position ~ 'N'),
          place_difference = final_call - odds_position) %>%
   group_by(rc_track, rc_date, rc_race, horse_name) %>%
   summarise(median_std_resid  = round(median(.std.resid),3),
             max_std_resid = round(max(.std.resid),3),
             min_std_resid = round(min(.std.resid),3),
             recent_std_resid  = recent_stat(.std.resid),
-            median_purse = median(purse),
-            max_purse = max(purse),
-            min_purse = min(purse),
-            recent_purse = recent_stat(purse),
+            median_purse = median(log_purse),
+            max_purse = max(log_purse),
+            min_purse = min(log_purse[log_purse > 0]),
+            recent_purse = recent_stat(log_purse),
             median_length_behind  = median(final_call_len_adj[final_call_len_adj < 99.99]),
             max_length_behind = max(final_call_len_adj[final_call_len_adj < 99.99]),
             min_length_behind = min(final_call_len_adj[final_call_len_adj < 99.99]),
@@ -332,10 +346,10 @@ spline_features <- races %>%
             dist_std_resid = replace_na(mean(.std.resid)),
             median_place_difference = median(place_difference),
             total_place_difference = sum(place_difference),
-            total_outperforms = sum(outperform == 'Y'),
+            total_performance = sum(performance == 'W') - sum(performance == 'L'),
             total_beaten_favorite = sum(beaten_favorite == 'Y'),
             recent_beaten_favorite = last(beaten_favorite),
-            recent_outperform = last(outperform),
+            recent_performance = last(performance),
             recent_place_difference = last(place_difference),
             races_run = n()
   )
@@ -354,6 +368,8 @@ spline_features <- races %>%
 
 
 # Spline fit plot
+
+# To do add facet wrap to view by purse_grade
 
 #running_lines %>%
 #   filter(beyer < 998, beyer > 0, distance <= 9, distance >= 4) %>%
@@ -654,7 +670,8 @@ correlation <- all_features %>%
 # Build Final Dataset
 
 # To Do
-# Make sure all horses are represented in the race, and filter out races when all horse aren't present
+# Make sure all horses are represented in the race, and filter out races when all horse aren't present#
+# Fix the purse representation - log of purse
 
 final_features <- all_features %>%
   group_by(rc_track, rc_race, rc_date) %>%
