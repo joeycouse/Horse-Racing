@@ -34,42 +34,6 @@ money_wins <-
 # Move some of the transformations into the read_write_file
 
 
-df %>%
-  select(-money_win, -bute, -payout, -favorite) %>%
-  filter(!is.na(days_since_last_race)) %>%
-  select(median_std_resid_3, median_std_resid_2) %>%
-  mutate(x = sqrt(median_std_resid_3), y = -sqrt(-median_std_resid_2)) %>%
-  ggplot()+
-  aes(x = x, y = y)+
-  geom_point()
-
-
-df %>%
-  ggplot(aes(x = min_std_resid_1)) +
-  geom_histogram()
-
-
-
-df %>%
-  ggplot(aes(x = sqrt(median_std_resid_3))) +
-  geom_histogram()
-
-
-df %>%
-  ggplot(aes(x = -sqrt(-median_std_resid_2))) +
-  geom_histogram()
-
-
-df %>%
-  ggplot(aes(x = jt_track_starts)) +
-  geom_density( fill = 'blue')
-
-
-# To do
-# investigate distribution of variables with box plots / histograms
-# add addtional model types: logistic regression, neural networks, SVM?
-
-
 
 #######################  Baseline Accuracy to Beat:
 

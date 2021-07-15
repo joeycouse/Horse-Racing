@@ -131,7 +131,7 @@ read_horse_files <- function(file_paths){
     unite('birthday', c(y_born, m_born, d_born), sep = '-') %>%
     mutate(birthday = ymd(birthday), 
            years_old = round(as.numeric((rc_date - birthday))/365.25, 2),
-           days_since_last_race = (rc_date - last_raced)) %>%
+           days_since_last_race = as.numeric((rc_date - last_raced))) %>%
     select(rc_track, 
            rc_date, 
            rc_race,
@@ -232,7 +232,6 @@ special <- map_df(special_files, ~read_csv(., trim_ws = TRUE,
 ###############################
 
 # To do
-# Create jockey file based on the running lines file
 
 # Returning dataframes and filtering to contain matches from both datasets
 starters <- starters %>%
@@ -250,13 +249,15 @@ starters <- starters %>%
 running_lines <- running_lines %>%
   filter(!(track %in% foreign_codes$Code))
 
+
 # Dependent variable generation and additional column generation
+# Watch races to ensure the odds are represented correctly
 
 starter_features <- starters %>%
   inner_join(races) %>%
   filter(non_betting_starter == 'N') %>%
   select(rc_track, rc_date, rc_race, num_horses, purse, distance, surface, track_condition,
-         horse_name,post_position, favorite, odds, finish_position, trainer_last_name, owner_last_name, final_len) %>%
+         horse_key, horse_name,post_position, favorite, odds, finish_position, trainer_last_name, owner_last_name, final_len) %>%
   group_by(rc_track, rc_date, rc_race) %>%
   mutate(final_len = if_else(post_position == 99, Inf, final_len),
          finish_order = min_rank(final_len),
@@ -278,11 +279,11 @@ starter_features <- starters %>%
 # Fitting cubic spline for distance vs speed function
 
 # To do 
-# Jockey out performances
-# Jockey place difference
 # races since last win
 # races since last money win
-# Average odds movement for jockey and horse
+# Average odds movement horse
+# Average odds of the horse
+
 
 spline_features <- races %>%
   select(rc_track, rc_date, rc_race, distance) %>%
@@ -293,20 +294,12 @@ spline_features <- races %>%
   select(rc_track, rc_date, rc_race, track, date, race, horse, 
          distance.x, distance.y, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
   mutate(horse = str_trim(horse),
-         log_purse = log(purse),
-         quant_purse = ecdf(log_purse)(log_purse),
-         purse_category = case_when(ecdf(log_purse)(log_purse) < 0.1 ~ 'F',
-                                    ecdf(log_purse)(log_purse) < 0.35 ~ 'D',
-                                    ecdf(log_purse)(log_purse) < 0.65 ~ 'C',
-                                    ecdf(log_purse)(log_purse) < 0.9 ~ 'B',
-                                    ecdf(log_purse)(log_purse) <= 1 ~ 'A')
-  )%>%
-  rename(horse_name = horse) %>%
-  nest_by(purse_category) %>%
-  group_by(purse_category) %>%
+         log_purse = log(purse))%>%
+  rename(horse_name = horse)%>%
+  nest(data = everything())%>%
   mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
-  unnest(cols = c(final)) %>%
+  unnest(cols = c(final))%>%
   mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
          beaten_favorite = if_else(odds_position == 1 & final_call_len_adj > 0.1, 'Y', 'N'),
          performance = case_when(final_call < odds_position ~ 'W',
@@ -330,8 +323,8 @@ spline_features <- races %>%
             max_beyer = max(beyer),
             min_beyer = min(beyer),
             recent_beyer = recent_stat(beyer),
-            improving = if_else(recent_beyer > beyer[2], 1,0),
-            improving = replace_na(improving, 0),
+            #improving = if_else(recent_beyer > beyer[2], 1,0),
+            #improving = replace_na(improving, 0),
             dist_beyer = mean(beyer[abs(distance.x - distance.y) <= 0.5]),
             dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 1])),
             dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 2])),
@@ -344,12 +337,14 @@ spline_features <- races %>%
             dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 1])),
             dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 2])),
             dist_std_resid = replace_na(mean(.std.resid)),
+            median_distance = median(distance.y),
             median_place_difference = median(place_difference),
+            median_odds_position = median(odds_position),
             total_place_difference = sum(place_difference),
             total_performance = sum(performance == 'W') - sum(performance == 'L'),
             total_beaten_favorite = sum(beaten_favorite == 'Y'),
             recent_beaten_favorite = last(beaten_favorite),
-            recent_performance = last(performance),
+            #recent_performance = last(performance),
             recent_place_difference = last(place_difference),
             races_run = n()
   )
@@ -672,21 +667,24 @@ correlation <- all_features %>%
 # To Do
 # Make sure all horses are represented in the race, and filter out races when all horse aren't present#
 # Fix the purse representation - log of purse
+# Distance of races - median distance of horse's race
 
 final_features <- all_features %>%
+  group_by(horse_key) %>%
+  mutate(purse = if_else(log(purse/1000) != -Inf, log(purse/1000), mean(purse)))%>%
+  ungroup() %>%
   group_by(rc_track, rc_race, rc_date) %>%
-  mutate(across(ends_with('_resid'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_length_behind'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('races_run'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('days_since_last_races'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_beyer'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(starts_with('best_'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(purse_1 = purse/1000 - median_purse,
-         purse_2 = purse/1000 - max_purse,
-         purse_3 = purse/1000 - min_purse,
-         purse_4 = purse/1000 - recent_purse, .keep = 'unused') %>%
-  mutate(across(ends_with('_money'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
-  mutate(across(ends_with('_earnings'), list(~ . - mean(.), ~ . - max(.) , ~ . - min(.))), .keep = 'unused') %>%
+  mutate(across(ends_with('_resid'), ~ . - mean(.)), .keep = 'unused')%>%
+  mutate(across(ends_with('_length_behind'), ~ . - mean(.)), .keep = 'unused')%>%
+  mutate(across(ends_with('races_run'),  ~ . - mean(.)), .keep = 'unused') %>%
+  mutate(across(ends_with('days_since_last_races'),  ~ . - mean(.)), .keep = 'unused')%>%
+  mutate(across(ends_with('_beyer'),  ~ . - mean(.)), .keep = 'unused') %>%
+  mutate(across(starts_with('best_'),  ~ . - mean(.)), .keep = 'unused') %>%
+  mutate(purse_diff = purse - median_purse,
+         purse_recent = purse - recent_purse,
+         distance_diff = distance - median_distance, .keep = 'unused')%>%
+  mutate(across(ends_with('_money'), ~ . - mean(.)), .keep = 'unused') %>%
+  mutate(across(ends_with('_earnings'), ~ . - mean(.)), .keep = 'unused') %>%
   mutate(weight = weight - mean(weight), .keep = 'unused') %>%
   mutate(years_old = years_old - mean(years_old), .keep = 'unused') %>%
   mutate(days_since_last_race = days_since_last_race - mean(days_since_last_race), .keep = 'unused') %>%
@@ -705,7 +703,9 @@ final_features <- all_features %>%
   relocate(money_win, .after = everything()) %>%
   relocate(horse_name, .after = 'rc_race') %>%
   mutate(win = fct_relevel(win, '1'),
-         money_win = fct_relevel(money_win, '1')) 
+         money_win = fct_relevel(money_win, '1'),
+         across(where(is.character), as.factor)) %>%
+  select(-horse_key, -bute) 
 
 
 #rm(betting, horses, final_features, all_features, races, races_features, race_results, running_lines, spline_features, starter_features, starters, special)
