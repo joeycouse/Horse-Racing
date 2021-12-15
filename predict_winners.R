@@ -24,6 +24,8 @@ path <- file.info(files) %>%
 
 df <- read_feather(path)
 
+
+
 money_wins <-
   df %>%
   select(money_win) %>%
@@ -33,6 +35,11 @@ money_wins <-
 # To Do
 # Move some of the transformations into the read_write_file
 
+model_df <- df %>%
+  select(-payout, -money_win, -c(rc_track, rc_race, rc_date, horse_name, num_horses,post_position )) %>%
+  filter(!if_any(everything(), is.na)) %>%
+  mutate(favorite = as_factor(favorite),
+    favorite = fct_relevel(favorite, '1'))
 
 
 #######################  Baseline Accuracy to Beat:
@@ -54,10 +61,19 @@ pr_baseline_curve <- pr_curve(df, win, odds) %>%
   autoplot()
 
 pr_baseline_curve
+
+pr_auc_vec(df$win, df$odds)
+roc_auc_vec(df$win, df$odds)
+f_meas_vec(model_df$win,model_df$favorite)
+
 # Baseline Accuracy
 df %>%
   summarise(baseline = sum(win==1)/n())
 
+
+model_df %>%
+  filter(is.na(days_since_last_race)) %>%
+  view()
 
 ########## Data Pre-processing:
 
@@ -66,18 +82,70 @@ df %>%
 splits <- initial_split(model_df, prop = 0.8)
 folds <- vfold_cv(training(splits), v = 5)
 
-boost_recipe <-
+lasso_recipe <-
   recipe(win ~ . , data = training(splits)) %>%
-  update_role(rc_track, rc_race, rc_date, horse_name, new_role = 'id') %>%
+  step_corr(all_numeric_predictors()) %>%
+  step_nzv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>%
   step_dummy(all_nominal_predictors()) %>%
-  step_smote(win, skip = TRUE) %>%
+  step_upsample(win) %>%
   prep()
 
+lasso_model <- logistic_reg(mode = 'classification',
+                            penalty = tune(),
+                            mixture = tune()) %>%
+  set_engine('glmnet')
 
-preview_data <- 
-  boost_recipe %>%
-  prep() %>%
-  juice()
+
+lasso_wrk_fl <- 
+  workflow() %>%
+  add_recipe(lasso_recipe) %>%
+  add_model(lasso_model)
+
+
+cv_results <- tune_grid(lasso_wrk_fl,
+                        resamples = folds,
+                        grid = 20,
+                        metrics = metric_set(pr_auc, roc_auc, accuracy, f_meas, kap, sensitivity, specificity),
+                        control = control_grid(verbose = T))
+
+cv_results %>%
+  collect_metrics()
+
+
+best_params <- 
+  cv_results %>%
+  select_by_one_std_err(metric = 'f_meas', penalty)
+
+final_lasso <-
+  lasso_wrk_fl %>%
+  finalize_workflow(best_params)
+
+
+final_fit <- 
+  final_lasso %>%
+  last_fit(splits, 
+            metrics = metric_set(pr_auc, roc_auc, accuracy, f_meas, kap, sensitivity, specificity))
+
+
+final_fit %>%
+  collect_metrics()
+
+model <- final_fit %>%
+  pluck('.workflow', 1) %>%
+  pull_workflow_fit()
+
+
+tidy(model) %>%
+  arrange(desc(abs(estimate))) %>%
+  filter(term != '(Intercept)') %>%
+  mutate(term = fct_reorder(term, estimate)) %>%
+  ggplot(aes(x = estimate,
+             y = term))+
+  labs(y =NULL, x = 'Importance')+
+  geom_col()
+
+
 
 ###############################################################################
 

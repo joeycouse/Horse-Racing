@@ -5,6 +5,7 @@ library(lubridate)
 library(splines2)
 library(ggcorrplot)
 library(feather)
+library(glue)
 
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
@@ -279,10 +280,8 @@ starter_features <- starters %>%
 # Fitting cubic spline for distance vs speed function
 
 # To do 
-# races since last win
-# races since last money win
-# Average odds movement horse
-# Average odds of the horse
+# Quantile of the horses time at that distance, recent and median
+# 
 
 
 spline_features <- races %>%
@@ -295,7 +294,11 @@ spline_features <- races %>%
          distance.x, distance.y, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
   mutate(horse = str_trim(horse),
          log_purse = log(purse))%>%
-  rename(horse_name = horse)%>%
+  rename(horse_name = horse)
+
+
+
+%>%
   nest(data = everything())%>%
   mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
@@ -698,7 +701,8 @@ final_features <- all_features %>%
                                      track_condition == 'Fast'|
                                      track_condition == 'Firm', 'Fast', 'Bad')) %>%
   mutate(track_condition = as_factor(track_condition)) %>%
-  mutate(odds_movement = replace_na(odds_movement, 0)) %>%
+  mutate(odds_movement = replace_na(odds_movement, 0))%>%
+  mutate(across(ends_with('earnings'), ~bestNormalize::orderNorm(.x)$x.t)) %>%
   relocate(win, .after  = everything()) %>%
   relocate(money_win, .after = everything()) %>%
   relocate(horse_name, .after = 'rc_race') %>%

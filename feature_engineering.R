@@ -8,6 +8,27 @@ library(feather)
 library(glue)
 
 
+recent_stat<- function(metric, bigger_better = TRUE){
+  
+  
+  if (length(metric) < 3) {
+    result = mean(metric)
+    return(result)
+  }
+  
+  else {
+    
+    if(bigger_better == FALSE){
+      result = (sum(metric[1:3]) - max(metric[1:3]))/2
+      return(result)
+    }
+    
+    result = (sum(metric[1:3]) - min(metric[1:3]))/2
+    return(result)
+    
+  }
+  
+}
 
 # Read in files
 running_lines <- read_feather('./data/running_lines.feather')
@@ -16,17 +37,16 @@ starters <- read_feather('./data/starters.feather')
 horses <- read_feather('./data/horses.feather')
 betting <- read_feather('./data/betting.feather')
 special <- read_feather('./data/special.feather')
+foreign_codes <- read_csv('~/Data Science/Horse Racing/Horse Racing Code/data/foreign_track_codes.csv')
 
 ###############################
-
-# To do
 
 # Returning dataframes and filtering to contain matches from both datasets
 starters <- starters %>%
   filter(post_position < 99, odds != 0, country == "USA")
 
 races <- races %>%
-  filter(num_horses <= 12, country == 'USA') 
+  filter(num_horses <= 12, country == 'USA', rc_distance <= 9, rc_distance >= 4)
 
 races <- races %>%
   semi_join(starters, by = c('rc_track', 'rc_date', 'rc_race')) 
@@ -35,8 +55,15 @@ starters <- starters %>%
   semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
 
 running_lines <- running_lines %>%
-  filter(!(track %in% foreign_codes$Code))
+  filter(!(track %in% foreign_codes$Code)) %>%
+  left_join(starters %>%
+              select('rc_date', 'rc_track', 'rc_race', 'horse_name', 'horse_key'))
 
+
+
+running_lines %>%
+  filter(is.na(horse_key)) %>%
+  view()
 
 # Dependent variable generation and additional column generation
 # Watch races to ensure the odds are represented correctly
@@ -44,12 +71,13 @@ running_lines <- running_lines %>%
 starter_features <- starters %>%
   inner_join(races) %>%
   filter(non_betting_starter == 'N') %>%
-  select(rc_track, rc_date, rc_race, num_horses, purse, distance, surface, track_condition,
-         horse_key, horse_name,post_position, favorite, odds, finish_position, trainer_last_name, owner_last_name, final_len) %>%
+  select(rc_track, rc_date, rc_race, num_horses, purse, rc_distance, surface, track_condition,
+         horse_key, horse_name,post_position, favorite, odds, finish_position, 
+         trainer_last_name, owner_last_name, final_len) %>%
   group_by(rc_track, rc_date, rc_race) %>%
   mutate(final_len = if_else(post_position == 99, Inf, final_len),
          finish_order = min_rank(final_len),
-         favorite = if_else(favorite == 'Y', 1, 0),
+         favorite = if_else(favorite == 'Y', 1, 0), #Get rid of this maybe?
          win = if_else(finish_order == 1 | final_len <= 10, 1, 0),
          money_win = if_else(finish_order <= 3, 1,0),
          horse_name = str_trim(horse_name),
@@ -68,26 +96,44 @@ starter_features <- starters %>%
 
 # To do 
 # Quantile of the horses time at that distance, recent and median
-# 
+# Add Price paid for the horse
+# Modify the time, which just the time for the winner not the other horses.
+# Take into account date leakage?
+
+
 
 
 spline_features <- races %>%
-  select(rc_track, rc_date, rc_race, distance) %>%
+  select(rc_track, rc_date, rc_race, rc_distance) %>%
   left_join(running_lines, by = c('rc_track', 'rc_date', 'rc_race')) %>%
-  filter(beyer < 998, beyer > 0, 
-         distance.x <= 9, distance.x >= 4,
-         distance.y <= 9, distance.y >= 4, purse >0) %>%
-  select(rc_track, rc_date, rc_race, track, date, race, horse, 
-         distance.x, distance.y, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
+  filter(beyer < 998, beyer > 0,
+         distance <= 9, distance >= 4, purse >0) %>%
+  select(rc_track, rc_date, rc_race, track, surface, trk_cond, date, race, horse, 
+         rc_distance, distance, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
+  distinct(horse, track, race, date)
   mutate(horse = str_trim(horse),
-         log_purse = log(purse))%>%
-  rename(horse_name = horse)
+         log_purse = log(purse),
+         surface = case_when(surface == 'A' ~ 'T',
+                             surface == 'B' ~ 'D',
+                             surface == 'O' ~ 'D',
+                             surface == 'X' ~ 'D',
+                             TRUE ~ surface),
+         trk_cond = case_when(trk_cond == 'wf' ~ 'fst',
+                              trk_cond == 'fr' ~ 'fm',
+                              TRUE ~ trk_cond),
+         final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
+         trk_cond = if_else(surface == 'D' & trk_cond == 'fm', 'fst', trk_cond))%>%
+  rename(horse_name = horse) %>%
+  group_by(surface, trk_cond, distance) %>%
+  mutate(speed_percentile = ecdf(final_time)(final_time))
+
+
 
 
 
 %>%
   nest(data = everything())%>%
-  mutate(model = map(data, ~lm(speed ~ mSpline(distance.y, degree = 3), data = .)))%>%
+  mutate(model = map(data, ~lm(speed ~ mSpline(distance, degree = 3), data = .)))%>%
   mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
   unnest(cols = c(final))%>%
   mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
@@ -115,7 +161,7 @@ spline_features <- races %>%
             recent_beyer = recent_stat(beyer),
             #improving = if_else(recent_beyer > beyer[2], 1,0),
             #improving = replace_na(improving, 0),
-            dist_beyer = mean(beyer[abs(distance.x - distance.y) <= 0.5]),
+            dist_beyer = mean(beyer[abs(rc_distance - distance) <= 0.5]),
             dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 1])),
             dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 2])),
             dist_beyer = replace_na(mean(beyer)),

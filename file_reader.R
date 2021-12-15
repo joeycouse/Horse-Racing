@@ -13,7 +13,6 @@ horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch
 betting_file_paths <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.pgh')
 special_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.cs')
 
-
 read_chart_files <- function(file_paths, return_races=FALSE, return_starters = TRUE){
   
   all_races = data.frame()
@@ -38,7 +37,7 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
         record_type = X1, rc_race = X2, breed = X3, race_type = X4, restrictions = X5, sex_restrictions = X6,
         age_restrictions = X7, division = X8, purse = X9, reverts_money = X10, available_money = X11, paid_to_others = X12, guaranteed_money = X13, added_money = X14,
         includes_one_money = X16, includes_two_money = X18, includes_three_money = X20, plus_one_money = X22, plus_two_money = X24, 
-        plus_three_money = X26, min_claiming = X27,max_claiming = X28, distance = X30, distance_unit = X31, surface = X32, 
+        plus_three_money = X26, min_claiming = X27,max_claiming = X28, rc_distance = X30, distance_unit = X31, surface = X32, 
         num_horses = X34, track_condition = X43, track_variant = X45, speed_number = X46) %>%
       mutate(restrictions = as.factor(restrictions), 
              sex_restrictions = as.factor(sex_restrictions), 
@@ -48,10 +47,10 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
              track_condition = as.factor(track_condition)) %>%
       select(-starts_with('X')) %>%
       type_convert() %>%  
-      select(country, rc_track, rc_date, rc_race, race_type, num_horses, purse, distance, distance_unit, surface, track_condition) %>%
+      select(country, rc_track, rc_date, rc_race, race_type, num_horses, purse, rc_distance, distance_unit, surface, track_condition) %>%
       mutate(distance_unit = if_else(is.na(distance_unit) | distance_unit == 'M' | distance_unit == 'F', 'F', 'Y'),
-             distance = round(distance/100,2)) %>%
-      mutate(distance = if_else(distance_unit == 'Y', round(distance * .454545, 1), distance)) %>%
+             rc_distance = round(rc_distance/100,2)) %>%
+      mutate(rc_distance = if_else(distance_unit == 'Y', round(rc_distance * .454545, 1), rc_distance)) %>%
       select(-distance_unit, -race_type)
     
     all_races <- bind_rows(all_races, races)
@@ -104,10 +103,12 @@ read_running_lines <- function(file_paths){
            final_time = as.numeric(dminutes(minutes)+dseconds(seconds))) %>%
     select(-minutes, -seconds) %>%
     mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M' | dist_unit == 'F', 'F', 'Y')) %>%
-    mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance)) %>%
+    mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance),
+           final_time = if_else(final_call != 1, final_time + 0.2 * final_call_len_adj, final_time)) %>%
     select(-dist_unit) %>%
     mutate(speed = distance/final_time) %>%
-    filter(speed <= 0.11, speed > 0.05, distance <= 20)
+    filter(speed <= 0.11, speed > 0.05, distance <= 20) %>%
+    rename(horse_name = horse)
   
   return(running_lines)
   
@@ -139,10 +140,12 @@ read_horse_files <- function(file_paths){
            horse,
            weight,
            post_position,
+           birthday,
            years_old,
            days_since_last_race,
            bute,
            lasix,
+           sale_price,
            cy_earnings:dist_shows,
            jt_track_starts:last_col()) %>%
     rowwise() %>%
@@ -167,7 +170,10 @@ read_horse_files <- function(file_paths){
     mutate(across(cy_money_pct:dist_money_pct, ~replace_na(. , 0))) %>%
     rename(horse_name = horse) %>%
     select(-post_position) %>%
-    mutate(horse_name = str_trim(horse_name))
+    mutate(horse_name = str_trim(horse_name)) %>%
+    group_by(horse_name, birthday) %>%
+    mutate(horse_id = cur_group_id()) %>%
+    ungroup()
   
   return(horse_files)
   
@@ -190,28 +196,6 @@ read_betting_files <- function(file_paths){
     select(-jockey, -post_position)
   
   return(betting_files)
-  
-}
-
-recent_stat<- function(metric, bigger_better = TRUE){
-  
-  
-  if (length(metric) < 3) {
-    result = mean(metric)
-    return(result)
-  }
-  
-  else {
-    
-    if(bigger_better == FALSE){
-      result = (sum(metric[1:3]) - max(metric[1:3]))/2
-      return(result)
-    }
-    
-    result = (sum(metric[1:3]) - min(metric[1:3]))/2
-    return(result)
-    
-  }
   
 }
 
