@@ -2,5 +2,6 @@
 .Rhistory
 .RData
 .Ruserdata
+working_file.R
 data/
 file_reader.R
