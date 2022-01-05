@@ -37,7 +37,7 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
         record_type = X1, rc_race = X2, breed = X3, race_type = X4, restrictions = X5, sex_restrictions = X6,
         age_restrictions = X7, division = X8, purse = X9, reverts_money = X10, available_money = X11, paid_to_others = X12, guaranteed_money = X13, added_money = X14,
         includes_one_money = X16, includes_two_money = X18, includes_three_money = X20, plus_one_money = X22, plus_two_money = X24, 
-        plus_three_money = X26, min_claiming = X27,max_claiming = X28, rc_distance = X30, distance_unit = X31, surface = X32, 
+        plus_three_money = X26, min_claiming = X27, max_claiming = X28, abt_dist = X29, rc_distance = X30, distance_unit = X31, surface = X32, course_type = X33,
         num_horses = X34, track_condition = X43, track_variant = X45, speed_number = X46) %>%
       mutate(restrictions = as.factor(restrictions), 
              sex_restrictions = as.factor(sex_restrictions), 

@@ -43,27 +43,26 @@ foreign_codes <- read_csv('~/Data Science/Horse Racing/Horse Racing Code/data/fo
 
 # Returning dataframes and filtering to contain matches from both datasets
 starters <- starters %>%
-  filter(post_position < 99, odds != 0, country == "USA")
+  filter(post_position < 99, odds != 0, country == "USA") %>%
+  group_by(rc_track, rc_race, rc_date) %>%
+  mutate(num_horses = n(),
+         .after = rc_race) %>%
+  ungroup()
 
 races <- races %>%
-  filter(num_horses <= 12, country == 'USA', rc_distance <= 9, rc_distance >= 4)
+  filter(num_horses <= 12, num_horses >= 6, country == 'USA', rc_distance <= 9, rc_distance >= 4)
 
 races <- races %>%
-  semi_join(starters, by = c('rc_track', 'rc_date', 'rc_race')) 
+  semi_join(starters, by = c('rc_track', 'rc_date', 'rc_race', 'num_horses')) 
 
 starters <- starters %>%
-  semi_join(races, by = c('rc_track', 'rc_date', 'rc_race'))
+  semi_join(races, by = c('rc_track', 'rc_date', 'rc_race', 'num_horses'))
 
 running_lines <- running_lines %>%
   filter(!(track %in% foreign_codes$Code)) %>%
-  left_join(starters %>%
-              select('rc_date', 'rc_track', 'rc_race', 'horse_name', 'horse_key'))
+  left_join(starters %>% select('rc_date', 'rc_track', 'rc_race', 'horse_name', 'horse_key'))
 
 
-
-running_lines %>%
-  filter(is.na(horse_key)) %>%
-  view()
 
 # Dependent variable generation and additional column generation
 # Watch races to ensure the odds are represented correctly
