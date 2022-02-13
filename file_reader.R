@@ -7,6 +7,10 @@ library(ggcorrplot)
 library(feather)
 library(glue)
 
+
+
+
+
 chart_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chart')
 running_line_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.chr')
 horse_files <- Sys.glob('~/Data Science/Horse Racing/Horse Racing Code/data/*.ch')
@@ -19,8 +23,10 @@ read_chart_files <- function(file_paths, return_races=FALSE, return_starters = T
   all_starters = data.frame()
   
   for (file_path in file_paths){
+  
+    #To Do  
+    #This is pretty ridiculous I have 3 calls to read_csv per Chart File, this needs to be cleaned up quite a bit
     
-    print(file_path)
     
     header <- read_csv(file_path, n_max =1, col_names = FALSE, col_types = 'ccccdcc') %>%
       select(-X1) %>%

@@ -69,6 +69,9 @@ running_lines <- running_lines %>%
   left_join(starters %>% select('rc_date', 'rc_track', 'rc_race', 'horse_name', 'horse_key'))
 
 
+
+
+# TO DO Look into Payoff Varibles from the Starter Files
 # Dependent variable generation and additional column generation
 
 starter_features <- starters %>%
