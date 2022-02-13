@@ -104,7 +104,9 @@ read_running_lines <- function(file_paths){
     select(-minutes, -seconds) %>%
     mutate(dist_unit = if_else(is.na(dist_unit) | dist_unit == 'M' | dist_unit == 'F', 'F', 'Y')) %>%
     mutate(distance = if_else(dist_unit == 'Y', distance * .454545, distance),
-           final_time = if_else(final_call != 1, final_time + 0.2 * final_call_len_adj, final_time)) %>%
+           winning_time = final_time,
+           final_time = if_else(final_call != 1, final_time + 0.2 * final_call_len_adj, final_time),
+           ) %>%
     select(-dist_unit) %>%
     mutate(speed = distance/final_time) %>%
     filter(speed <= 0.11, speed > 0.05, distance <= 20) %>%

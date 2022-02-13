@@ -2,11 +2,12 @@ library(tidyverse)
 library(broom)
 library(janitor)
 library(lubridate)
-library(splines2)
+library(splines)
 library(ggcorrplot)
 library(feather)
 library(glue)
-
+library(tidymodels)
+library(embed)
 
 recent_stat<- function(metric, bigger_better = TRUE){
   
@@ -39,10 +40,15 @@ betting <- read_feather('./data/betting.feather')
 special <- read_feather('./data/special.feather')
 foreign_codes <- read_csv('~/Data Science/Horse Racing/Horse Racing Code/data/foreign_track_codes.csv')
 
+model_board <- pins::board_folder("./models")
+lasso_mod <- vetiver::vetiver_pin_read(model_board, "lasso_mod")
+
 ###############################
 
 # Returning dataframes and filtering to contain matches from both datasets
 starters <- starters %>%
+  filter(non_betting_starter == 'N') %>%
+  select(-non_betting_starter) %>%
   filter(post_position < 99, odds != 0, country == "USA") %>%
   group_by(rc_track, rc_race, rc_date) %>%
   mutate(num_horses = n(),
@@ -63,29 +69,26 @@ running_lines <- running_lines %>%
   left_join(starters %>% select('rc_date', 'rc_track', 'rc_race', 'horse_name', 'horse_key'))
 
 
-
 # Dependent variable generation and additional column generation
-# Watch races to ensure the odds are represented correctly
 
 starter_features <- starters %>%
   inner_join(races) %>%
-  filter(non_betting_starter == 'N') %>%
   select(rc_track, rc_date, rc_race, num_horses, purse, rc_distance, surface, track_condition,
-         horse_key, horse_name,post_position, favorite, odds, finish_position, 
+         horse_key, horse_name, post_position, favorite, odds, finish_position, 
          trainer_last_name, owner_last_name, final_len) %>%
   group_by(rc_track, rc_date, rc_race) %>%
   mutate(final_len = if_else(post_position == 99, Inf, final_len),
          finish_order = min_rank(final_len),
-         favorite = if_else(favorite == 'Y', 1, 0), #Get rid of this maybe?
          win = if_else(finish_order == 1 | final_len <= 10, 1, 0),
          money_win = if_else(finish_order <= 3, 1,0),
          horse_name = str_trim(horse_name),
-         payout = odds/100,
+         profit = odds/100,
          odds = 100/(odds+100),
          ) %>%
-  select(-finish_position, - finish_order, - final_len) %>%
+  select(-finish_position, -finish_order, -final_len) %>%
   rowwise() %>%
-  mutate(owner_trainer_same = as.numeric(str_detect(owner_last_name, trainer_last_name)), .keep = 'unused') %>%
+  mutate(owner_trainer_same = as.numeric(str_detect(owner_last_name, regex(trainer_last_name, ignore_case = T))),
+                                         .keep = 'unused') %>%
   ungroup() %>%
   group_by(rc_track, rc_date, rc_race) %>%
   mutate(odds = round(odds/sum(odds), 3)) %>%
@@ -96,21 +99,17 @@ starter_features <- starters %>%
 # To do 
 # Quantile of the horses time at that distance, recent and median
 # Add Price paid for the horse
-# Modify the time, which just the time for the winner not the other horses.
 # Take into account date leakage?
 
 
-
-
-spline_features <- races %>%
+spline_features <- 
+  races %>%
   select(rc_track, rc_date, rc_race, rc_distance) %>%
   left_join(running_lines, by = c('rc_track', 'rc_date', 'rc_race')) %>%
-  filter(beyer < 998, beyer > 0,
-         distance <= 9, distance >= 4, purse >0) %>%
-  select(rc_track, rc_date, rc_race, track, surface, trk_cond, date, race, horse, 
-         rc_distance, distance, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
-  distinct(horse, track, race, date)
-  mutate(horse = str_trim(horse),
+  filter(beyer < 998, beyer > 0, purse > 0) %>%
+  select(rc_track, rc_date, rc_race, rc_distance, track, surface, trk_cond, date, race, horse_name, 
+         distance, speed, purse, final_call, final_call_len_adj, odds_position, final_time, beyer) %>%
+  mutate(horse_name = str_trim(horse_name),
          log_purse = log(purse),
          surface = case_when(surface == 'A' ~ 'T',
                              surface == 'B' ~ 'D',
@@ -121,35 +120,44 @@ spline_features <- races %>%
                               trk_cond == 'fr' ~ 'fm',
                               TRUE ~ trk_cond),
          final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
-         trk_cond = if_else(surface == 'D' & trk_cond == 'fm', 'fst', trk_cond))%>%
-  rename(horse_name = horse) %>%
-  group_by(surface, trk_cond, distance) %>%
-  mutate(speed_percentile = ecdf(final_time)(final_time))
+         trk_cond = if_else(surface == 'D' & trk_cond == 'fm', 'fst', trk_cond)) 
 
 
+# To do 
+
+#Bayes Representations of Statistics info, e.g. finishing above odds multiple times is more important than once
 
 
-
-%>%
-  nest(data = everything())%>%
-  mutate(model = map(data, ~lm(speed ~ mSpline(distance, degree = 3), data = .)))%>%
-  mutate(final = map2(model, data, ~augment(.x, .y)), .keep ='unused') %>%
-  unnest(cols = c(final))%>%
-  mutate(final_call_len_adj = if_else(final_call == 1, -1*final_call_len_adj, final_call_len_adj),
-         beaten_favorite = if_else(odds_position == 1 & final_call_len_adj > 0.1, 'Y', 'N'),
+# Investigate the skewness of the residuals seem to be right skewed...
+test <- 
+  augment(lasso_mod, new_data = spline_features) |> 
+  rename(predicted_speed = .pred) |> 
+  mutate(final_call_len_adj = if_else(final_call == 1, 
+                                      -1*final_call_len_adj, 
+                                      final_call_len_adj),
          performance = case_when(final_call < odds_position ~ 'W',
                                  final_call > odds_position ~ 'L',
                                  final_call == odds_position ~ 'N'),
-         place_difference = final_call - odds_position) %>%
-  group_by(rc_track, rc_date, rc_race, horse_name) %>%
-  summarise(median_std_resid  = round(median(.std.resid),3),
+         place_difference = final_call - odds_position,
+         .resid = scale(speed - predicted_speed)
+         ) |> 
+  nest_by(rc_track, rc_date, rc_race, horse_name) |> 
+  mutate(mean_std_resid = round(mean(data$.resid),3)) |> 
+  select(mean_std_resid) |> 
+  ungroup() |> 
+  mutate(mean_std_resid = scale(mean_std_resid)) |> 
+  ggplot()+
+  aes(x = mean_std_resid) +
+  geom_histogram()
+
+test
+  
+  summarise(
+    # Look into Bayes version of this? Maybe some better way to take into account # of observations?
+            median_std_resid  = round(median(.std.resid),3),
             max_std_resid = round(max(.std.resid),3),
             min_std_resid = round(min(.std.resid),3),
             recent_std_resid  = recent_stat(.std.resid),
-            median_purse = median(log_purse),
-            max_purse = max(log_purse),
-            min_purse = min(log_purse[log_purse > 0]),
-            recent_purse = recent_stat(log_purse),
             median_length_behind  = median(final_call_len_adj[final_call_len_adj < 99.99]),
             max_length_behind = max(final_call_len_adj[final_call_len_adj < 99.99]),
             min_length_behind = min(final_call_len_adj[final_call_len_adj < 99.99]),
@@ -160,19 +168,12 @@ spline_features <- races %>%
             recent_beyer = recent_stat(beyer),
             #improving = if_else(recent_beyer > beyer[2], 1,0),
             #improving = replace_na(improving, 0),
-            dist_beyer = mean(beyer[abs(rc_distance - distance) <= 0.5]),
-            dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 1])),
-            dist_beyer = replace_na(mean(beyer[abs(distance.x - distance.y) <= 2])),
-            dist_beyer = replace_na(mean(beyer)),
-            dist_length_behind = mean(final_call_len_adj[abs(distance.x - distance.y) <= 0.5]),
-            dist_length_behind = replace_na(mean(final_call_len_adj[abs(distance.x - distance.y) <= 1])),
-            dist_length_behind = replace_na(mean(final_call_len_adj[abs(distance.x - distance.y) <= 2])),
-            dist_length_behind = replace_na(mean(final_call_len_adj)),
             dist_std_resid = mean(.std.resid[abs(distance.x - distance.y) <= 0.5]),
             dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 1])),
             dist_std_resid = replace_na(mean(.std.resid[abs(distance.x - distance.y) <= 2])),
             dist_std_resid = replace_na(mean(.std.resid)),
             median_distance = median(distance.y),
+            # Look into Bayes version of this? Maybe some better way to take into account # of observations?
             median_place_difference = median(place_difference),
             median_odds_position = median(odds_position),
             total_place_difference = sum(place_difference),

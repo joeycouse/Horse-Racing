@@ -1,0 +1,9 @@
+file: lasso_mod.rds
+file_size: 3994478
+pin_hash: 5847b194beaa61cd
+type: rds
+title: 'lasso_mod: a pinned list'
+description: A glmnet regression modeling workflow
+created: 20220207T213800Z
+api_version: 1.0
+user: []
